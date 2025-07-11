@@ -1,0 +1,20 @@
+const multer = require("multer");
+const { CloudinaryStorage } = require("multer-storage-cloudinary");
+const cloudinary = require("../config/cloudinary");
+
+const storage = new CloudinaryStorage({
+  cloudinary: cloudinary,
+  params: {
+    folder: "avatars",
+    allowed_formats: ["jpg", "png", "jpeg"],
+  },
+});
+
+const upload = multer({ storage: storage });
+
+upload.fileFilter = (req, file, cb) => {
+  console.log("📥 Uploading file:", file.originalname);
+  cb(null, true);
+};
+
+module.exports = upload;
