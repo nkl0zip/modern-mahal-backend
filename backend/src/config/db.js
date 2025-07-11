@@ -3,6 +3,9 @@ require("dotenv").config();
 
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL, // stored in .env
+  ssl: {
+    rejectUnauthorized: false, // ✅ Render uses a self-signed cert
+  },
 });
 
 pool.on("connect", () => {
