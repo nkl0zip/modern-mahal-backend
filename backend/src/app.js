@@ -5,6 +5,7 @@ require("dotenv").config();
 
 const authRoutes = require("./routes/auth.routes");
 const profileRoutes = require("./routes/profile.routes");
+const categoryRoutes = require("./routes/admin/category.routes");
 
 const errorHandler = require("./middlewares/error.middleware");
 
@@ -18,6 +19,7 @@ app.use(bodyParser.urlencoded({ extended: true }));
 // Routes
 app.use("/api/profile", profileRoutes);
 app.use("/api/auth", authRoutes);
+app.use("/api/category", categoryRoutes);
 
 app.use(errorHandler); // Add after all routes
 
