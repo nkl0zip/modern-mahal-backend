@@ -9,6 +9,7 @@ const categoryRoutes = require("./routes/admin/category.routes");
 const brandRoutes = require("./routes/admin/brand.routes");
 const productRoutes = require("./routes/staff/product.routes");
 const productImageRoutes = require("./routes/staff/productImage.routes");
+const addressRoutes = require("./routes/address.routes");
 
 const errorHandler = require("./middlewares/error.middleware");
 
@@ -16,6 +17,7 @@ const app = express();
 
 // Middleware
 app.use(cors());
+app.use(express.json());
 app.use(bodyParser.json());
 app.use(bodyParser.urlencoded({ extended: true }));
 
@@ -26,6 +28,7 @@ app.use("/api/category", categoryRoutes);
 app.use("/api/brand", brandRoutes);
 app.use("/api/products", productRoutes);
 app.use("/api/product-images", productImageRoutes);
+app.use("/api/addresses", addressRoutes);
 
 app.use(errorHandler);
 

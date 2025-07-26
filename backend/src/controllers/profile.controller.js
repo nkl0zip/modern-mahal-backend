@@ -4,7 +4,7 @@ const { upsertUserProfile } = require("../models/user_profile.model");
 const updateProfile = async (req, res) => {
   try {
     const userId = req.user.id;
-    const { name, date_of_birth, address, bio, working_email } = req.body;
+    const { name, date_of_birth, bio, working_email } = req.body;
     const avatarUrl = req.file ? req.file.path : null;
 
     // Update usera table
@@ -15,7 +15,6 @@ const updateProfile = async (req, res) => {
       userId,
       date_of_birth,
       avatarUrl,
-      address,
       bio,
       working_email
     );
