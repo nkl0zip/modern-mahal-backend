@@ -30,14 +30,15 @@
     "express": "^5.1.0",
     "google-auth-library": "^10.1.0",
     "jsonwebtoken": "^9.0.2",
-    "multer": "^2.0.1",
+    "multer": "^2.0.2",
     "multer-storage-cloudinary": "^4.0.0",
     "nodemailer": "^7.0.4",
     "otp-generator": "^4.0.1",
     "passport": "^0.7.0",
     "passport-google-oauth20": "^2.0.0",
     "pg": "^8.16.3",
-    "twilio": "^5.7.2"
+    "twilio": "^5.7.2",
+    "xlsx": "^0.18.5"
   },
   "devDependencies": {
     "eslint": "^8.54.0",
