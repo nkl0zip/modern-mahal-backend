@@ -1,5 +1,14 @@
 const pool = require("../config/db");
 
+// Get Profile Info
+const getUserProfile = async (userId) => {
+  const query = `
+  SELECT * FROM user_profiles WHERE user_id = $1`;
+
+  const result = await pool.query(query, [userId]);
+  return result.rows[0];
+};
+
 // Create User Details - Automatically creates itself when the user authenticates. Only call updateUser route after the user is authenticated
 const createUserProfile = async (userId) => {
   const query = `
@@ -35,4 +44,4 @@ const upsertUserProfile = async (
   return result.rows[0];
 };
 
-module.exports = { upsertUserProfile, createUserProfile };
+module.exports = { getUserProfile, upsertUserProfile, createUserProfile };
