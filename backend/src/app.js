@@ -10,6 +10,7 @@ const brandRoutes = require("./routes/admin/brand.routes");
 const productRoutes = require("./routes/staff/product.routes");
 const productImageRoutes = require("./routes/staff/productImage.routes");
 const addressRoutes = require("./routes/address.routes");
+const wishlistRoutes = require("./routes/wishlist.routes");
 
 const errorHandler = require("./middlewares/error.middleware");
 
@@ -29,6 +30,7 @@ app.use("/api/brand", brandRoutes);
 app.use("/api/products", productRoutes);
 app.use("/api/product-images", productImageRoutes);
 app.use("/api/addresses", addressRoutes);
+app.use("/api/wishlist", wishlistRoutes);
 
 app.use(errorHandler);
 
