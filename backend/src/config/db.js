@@ -5,9 +5,9 @@ const pool = new Pool({
   connectionString: process.env.DATABASE_URL, // stored in .env
 
   //Dont Forget to comment off this ssl setting on main server
-  ssl: {
-    rejectUnauthorized: false, // Render uses a self-signed cert
-  },
+  //ssl: {
+  //  rejectUnauthorized: false, // Render uses a self-signed cert
+  //},
 });
 
 pool.on("connect", () => {

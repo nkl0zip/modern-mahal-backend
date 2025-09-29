@@ -9,6 +9,7 @@ const getUserWishlist = async (userId) => {
       p.name AS product_name, 
       p.product_code, 
       p.price_per_unit,
+      p.stock_quantity,
       pi.media_url AS product_image
     FROM wishlists w
     JOIN products p ON w.product_id = p.id
