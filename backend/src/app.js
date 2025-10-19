@@ -12,6 +12,7 @@ const productImageRoutes = require("./routes/staff/productImage.routes");
 const addressRoutes = require("./routes/address.routes");
 const wishlistRoutes = require("./routes/wishlist.routes");
 const cartRoutes = require("./routes/cart.routes");
+const reviewRoutes = require("./routes/review.routes");
 
 const errorHandler = require("./middlewares/error.middleware");
 
@@ -33,6 +34,7 @@ app.use("/api/product-images", productImageRoutes);
 app.use("/api/addresses", addressRoutes);
 app.use("/api/wishlist", wishlistRoutes);
 app.use("/api/cart", cartRoutes);
+app.use("/api/reviews", reviewRoutes);
 
 app.use(errorHandler);
 
