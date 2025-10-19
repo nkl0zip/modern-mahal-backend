@@ -7,6 +7,7 @@ const {
   searchProductsHandler,
   createSingleProductHandler,
   getBrandsProductListHandler,
+  getProductListBySearchHandler,
 } = require("../../controllers/staff/product.controller");
 
 // Configureing multer for excel upload
@@ -46,5 +47,10 @@ router.post("/", createSingleProductHandler);
 // GET /api/products/brands/:id
 // Allowed for all roles
 router.get("/brands/:id", getBrandsProductListHandler);
+
+// Fuzzy Search GET /api/products/list?name=xyz
+// Fuzzy Search GET /api/products/list?product_id=uuid
+// Allowed for all roles
+router.get("/list", getProductListBySearchHandler);
 
 module.exports = router;

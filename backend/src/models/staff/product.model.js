@@ -239,6 +239,85 @@ const getBrandsProductList = async (brand_id) => {
   return result.rows;
 };
 
+/**
+ * Model to fetch products by name (fuzzy) or product_id (exact)
+ * Includes product image (display_order = 1), brand info, and essential fields.
+ */
+const getProductListBySearch = async ({ name, product_id }) => {
+  if (!name && !product_id) {
+    return [];
+  }
+
+  let query;
+  let values;
+
+  // Exact search by ID is unchanged
+  if (product_id) {
+    query = `
+      SELECT
+        p.id AS product_id,
+        p.name AS product_name,
+        p.product_code,
+        p.price_per_unit,
+        b.name AS brand_name,
+        (
+          SELECT pi.media_url FROM products_image pi
+          WHERE pi.product_id = p.id AND pi.display_order = 1 LIMIT 1
+        ) AS product_image
+      FROM products p
+      LEFT JOIN brands b ON p.brand_id = b.id
+      WHERE p.id = $1;
+    `;
+    values = [product_id];
+  } else {
+    // UPDATED: Powerful fuzzy search query
+    query = `
+      WITH ProductScores AS (
+        SELECT
+          p.id,
+          p.name,
+          p.product_code,
+          p.price_per_unit,
+          p.brand_id,
+          -- Calculate a relevance score based on the highest similarity across multiple fields
+          GREATEST(
+            similarity(p.name, $1),
+            similarity(p.description, $1),
+            COALESCE(similarity(b.name, $1), 0),
+            COALESCE((
+              SELECT MAX(similarity(c.name, $1))
+              FROM categories c
+              JOIN product_category pc ON c.id = pc.category_id
+              WHERE pc.product_id = p.id
+            ), 0)
+          ) AS score
+        FROM products p
+        LEFT JOIN brands b ON p.brand_id = b.id
+      )
+      SELECT
+        ps.id AS product_id,
+        ps.name AS product_name,
+        ps.product_code,
+        ps.price_per_unit,
+        b.name AS brand_name,
+        (
+          SELECT pi.media_url FROM products_image pi
+          WHERE pi.product_id = ps.id AND pi.display_order = 1 LIMIT 1
+        ) AS product_image,
+        ps.score
+      FROM ProductScores ps
+      LEFT JOIN brands b ON ps.brand_id = b.id
+      WHERE ps.score > 0.1  -- The similarity threshold (adjustable)
+      ORDER BY ps.score DESC -- Show most relevant results first
+      LIMIT 20; -- Limit results for performance
+    `;
+    values = [name];
+  }
+
+  const { rows } = await pool.query(query, values);
+  return rows;
+};
+
 module.exports = {
   findIdByName,
   createProduct,
@@ -248,4 +327,5 @@ module.exports = {
   getAllProductDetails,
   searchProducts,
   getBrandsProductList,
+  getProductListBySearch,
 };

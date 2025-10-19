@@ -10,6 +10,7 @@ const {
   getAllProductDetails,
   searchProducts,
   getBrandsProductList,
+  getProductListBySearch,
 } = require("../../models/staff/product.model");
 
 const uploadProductsFromExcel = async (req, res, next) => {
@@ -309,10 +310,43 @@ const getBrandsProductListHandler = async (req, res, next) => {
   }
 };
 
+// To Fetch product list by name (fuzzy) or product_id (exact)
+const getProductListBySearchHandler = async (req, res, next) => {
+  try {
+    const { name, product_id } = req.query;
+
+    // Validate input
+    if (!name && !product_id) {
+      return res.status(400).json({
+        message: "Please provide either 'name' or 'product_id' to search.",
+      });
+    }
+
+    const products = await getProductListBySearch({ name, product_id });
+
+    if (!products || products.length === 0) {
+      return res.status(404).json({
+        message: "No products found matching your criteria.",
+        products: [],
+      });
+    }
+
+    res.status(200).json({
+      message: "Products fetched successfully.",
+      count: products.length,
+      products,
+    });
+  } catch (err) {
+    console.error("Error fetching the product list: ", err);
+    next(err);
+  }
+};
+
 module.exports = {
   uploadProductsFromExcel,
   getAllProductsHandler,
   searchProductsHandler,
   createSingleProductHandler,
   getBrandsProductListHandler,
+  getProductListBySearchHandler,
 };
