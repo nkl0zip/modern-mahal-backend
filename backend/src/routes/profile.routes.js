@@ -4,7 +4,7 @@ const {
   getProfileHandler,
   updateProfile,
 } = require("../controllers/profile.controller");
-const authenticateToken = require("../middlewares/auth.middleware");
+const { authenticateToken } = require("../middlewares/auth.middleware");
 const upload = require("../middlewares/upload.middleware");
 
 // GET /api/profile

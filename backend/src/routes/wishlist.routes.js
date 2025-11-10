@@ -1,5 +1,5 @@
 const express = require("express");
-const authenticateToken = require("../middlewares/auth.middleware");
+const { authenticateToken } = require("../middlewares/auth.middleware");
 const {
   getUserWishlistHandler,
   addToWishlistHandler,

@@ -13,10 +13,18 @@ const addressRoutes = require("./routes/address.routes");
 const wishlistRoutes = require("./routes/wishlist.routes");
 const cartRoutes = require("./routes/cart.routes");
 const reviewRoutes = require("./routes/review.routes");
+const adminRoutes = require("./routes/admin/admin.routes");
+const staffRoutes = require("./routes/staff/staff.routes");
 
 const errorHandler = require("./middlewares/error.middleware");
 
 const app = express();
+
+const { ensureAdminAccount } = require("./models/admin/admin.model");
+
+(async () => {
+  await ensureAdminAccount();
+})();
 
 // Middleware
 app.use(cors());
@@ -35,6 +43,8 @@ app.use("/api/addresses", addressRoutes);
 app.use("/api/wishlist", wishlistRoutes);
 app.use("/api/cart", cartRoutes);
 app.use("/api/reviews", reviewRoutes);
+app.use("/api/admin", adminRoutes);
+app.use("/api/staff", staffRoutes);
 
 app.use(errorHandler);
 
