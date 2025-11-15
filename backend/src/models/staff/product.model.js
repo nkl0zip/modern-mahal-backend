@@ -142,6 +142,60 @@ async function getAllProductDetails() {
   return result.rows;
 }
 
+// Fetch product details by product ID with joins for all attributes
+async function getProductDetailsById(productId) {
+  const query = `
+    SELECT 
+      p.id,
+      p.name AS "Product Name",
+      b.name AS "Brand",
+      p.product_code AS "Product Code",
+      p.description AS "Description",
+      p.stock_quantity AS "Stock Quantity",
+      p.quantity_per_unit AS "Quantity Per Unit",
+      p.price_per_unit AS "Price per unit",
+      p.quantity_bundle_max AS "Quantity Bundle Max",
+      p.price_bundle_max AS "Price Bundle Max",
+      p.quantity_bundle_ultra AS "Quantity Bundle Ultra",
+      p.price_bundle_ultra AS "Price Bundle Ultra",
+      p.weight_capacity AS "Weight Capacity",
+      p.product_dimension AS "Product Dimension",
+      p.warranty AS "Warranty",
+
+      -- Arrays for categories and colors
+      ARRAY(
+        SELECT c.name
+        FROM product_category pc
+        JOIN categories c ON pc.category_id = c.id
+        WHERE pc.product_id = p.id
+      ) AS "Product Category",
+
+      ARRAY(
+        SELECT cl.name
+        FROM product_color pcl
+        JOIN colors cl ON pcl.color_id = cl.id
+        WHERE pcl.product_id = p.id
+      ) AS "Colour",
+
+      -- One-to-many attributes
+      ARRAY(SELECT h.text FROM highlights h WHERE h.product_id = p.id) AS "Highlights",
+      ARRAY(SELECT a.name FROM alloys a WHERE a.product_id = p.id) AS "Alloy",
+      ARRAY(SELECT u.name FROM usability u WHERE u.product_id = p.id) AS "Usability",
+      ARRAY(SELECT ibc.name FROM in_box_content ibc WHERE ibc.product_id = p.id) AS "In Box Content",
+      ARRAY(SELECT t.name FROM tags t WHERE t.product_id = p.id) AS "Tags"
+
+    FROM products p
+    LEFT JOIN brands b ON p.brand_id = b.id
+    WHERE p.id = $1
+    LIMIT 1;
+  `;
+
+  const result = await pool.query(query, [productId]);
+
+  // Return null if product not found
+  return result.rows.length ? result.rows[0] : null;
+}
+
 // Fetch products by name (partial match) or code (exact match)
 async function searchProducts({ name, code }) {
   let whereClause = "";
@@ -328,4 +382,5 @@ module.exports = {
   searchProducts,
   getBrandsProductList,
   getProductListBySearch,
+  getProductDetailsById,
 };
