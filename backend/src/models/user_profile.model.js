@@ -3,7 +3,25 @@ const pool = require("../config/db");
 // Get Profile Info
 const getUserProfile = async (userId) => {
   const query = `
-  SELECT * FROM user_profiles WHERE user_id = $1`;
+    SELECT 
+      u.name,
+      u.email,
+      u.role,
+      u.is_verified,
+
+      up.user_id,
+      up.date_of_birth,
+      up.avatar_url,
+      up.bio,
+      up.created_at AS profile_created_at,
+      up.updated_at AS profile_updated_at,
+      up.working_email
+
+    FROM users u
+    LEFT JOIN user_profiles up
+      ON u.id = up.user_id
+    WHERE u.id = $1
+  `;
 
   const result = await pool.query(query, [userId]);
   return result.rows[0];
