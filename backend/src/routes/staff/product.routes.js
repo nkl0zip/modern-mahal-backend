@@ -9,6 +9,7 @@ const {
   getBrandsProductListHandler,
   getProductListBySearchHandler,
   getProductDetailsByIdHandler,
+  getProductsByCategoryHandler,
 } = require("../../controllers/staff/product.controller");
 
 // Configureing multer for excel upload
@@ -37,6 +38,10 @@ router.post("/upload-excel", upload.single("file"), uploadProductsFromExcel);
 // GET /api/products
 // For ADMIN/STAFF
 router.get("/", getAllProductsHandler);
+
+// Allowed for all roles
+// GET /api/products/category?name=xyz OR ?id=uuid
+router.get("/category", getProductsByCategoryHandler);
 
 // GET /api/products/search?name= or /api/products/search?code=
 router.get("/search", searchProductsHandler);

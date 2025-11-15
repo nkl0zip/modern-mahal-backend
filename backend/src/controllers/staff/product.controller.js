@@ -12,6 +12,7 @@ const {
   getBrandsProductList,
   getProductListBySearch,
   getProductDetailsById,
+  getProductsByCategory,
 } = require("../../models/staff/product.model");
 
 const uploadProductsFromExcel = async (req, res, next) => {
@@ -370,6 +371,39 @@ const getProductDetailsByIdHandler = async (req, res, next) => {
   }
 };
 
+const getProductsByCategoryHandler = async (req, res, next) => {
+  try {
+    const { id, name } = req.query;
+
+    if (!id && !name) {
+      return res.status(400).json({
+        message: "Please provide either 'id' or 'name' for category.",
+      });
+    }
+
+    const products = await getProductsByCategory({
+      category_id: id,
+      category_name: name,
+    });
+
+    if (!products || products.length === 0) {
+      return res.status(404).json({
+        message: "No products found for this category.",
+        products: [],
+      });
+    }
+
+    res.status(200).json({
+      message: "Products fetched successfully.",
+      count: products.length,
+      products,
+    });
+  } catch (error) {
+    console.error("Error fetching products by category:", error);
+    next(error);
+  }
+};
+
 module.exports = {
   uploadProductsFromExcel,
   getAllProductsHandler,
@@ -378,4 +412,5 @@ module.exports = {
   getBrandsProductListHandler,
   getProductListBySearchHandler,
   getProductDetailsByIdHandler,
+  getProductsByCategoryHandler,
 };

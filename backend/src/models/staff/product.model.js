@@ -372,6 +372,63 @@ const getProductListBySearch = async ({ name, product_id }) => {
   return rows;
 };
 
+// Get Products By Category (name or ID)
+const getProductsByCategory = async ({ category_id, category_name }) => {
+  if (!category_id && !category_name) return [];
+
+  let query;
+  let values;
+
+  // Search by category ID
+  if (category_id) {
+    query = `
+      SELECT
+        p.id AS product_id,
+        p.name AS product_name,
+        p.product_code,
+        p.price_per_unit,
+        b.name AS brand_name,
+        (
+          SELECT pi.media_url FROM products_image pi
+          WHERE pi.product_id = p.id AND pi.display_order = 1
+          LIMIT 1
+        ) AS product_image
+      FROM products p
+      JOIN product_category pc ON pc.product_id = p.id
+      JOIN categories c ON c.id = pc.category_id
+      LEFT JOIN brands b ON p.brand_id = b.id
+      WHERE c.id = $1
+      ORDER BY p.created_at DESC;
+    `;
+    values = [category_id];
+  } else {
+    // Search by category NAME
+    query = `
+      SELECT
+        p.id AS product_id,
+        p.name AS product_name,
+        p.product_code,
+        p.price_per_unit,
+        b.name AS brand_name,
+        (
+          SELECT pi.media_url FROM products_image pi
+          WHERE pi.product_id = p.id AND pi.display_order = 1
+          LIMIT 1
+        ) AS product_image
+      FROM products p
+      JOIN product_category pc ON pc.product_id = p.id
+      JOIN categories c ON c.id = pc.category_id
+      LEFT JOIN brands b ON p.brand_id = b.id
+      WHERE LOWER(c.name) = LOWER($1)
+      ORDER BY p.created_at DESC;
+    `;
+    values = [category_name];
+  }
+
+  const { rows } = await pool.query(query, values);
+  return rows;
+};
+
 module.exports = {
   findIdByName,
   createProduct,
@@ -383,4 +440,5 @@ module.exports = {
   getBrandsProductList,
   getProductListBySearch,
   getProductDetailsById,
+  getProductsByCategory,
 };
