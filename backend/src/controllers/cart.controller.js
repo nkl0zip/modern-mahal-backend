@@ -48,10 +48,10 @@ const getCartHandler = async (req, res, next) => {
   }
 };
 
-// ADD TO CART
+// ADD TO CART (Variant Aware)
 const addToCartHandler = async (req, res, next) => {
   try {
-    const { user_id, product_id, quantity } = req.body;
+    const { user_id, product_id, quantity, product_options } = req.body;
     if (!user_id) return res.status(400).json({ message: "user_id required." });
     if (!product_id)
       return res.status(400).json({ message: "product_id required." });
@@ -63,6 +63,7 @@ const addToCartHandler = async (req, res, next) => {
       cart_id: cart.id,
       product_id,
       quantity,
+      product_options: product_options || {},
     });
 
     res.status(200).json({ message: "Product Added.", cart_item: cartItem });

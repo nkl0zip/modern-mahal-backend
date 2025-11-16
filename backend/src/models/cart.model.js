@@ -34,12 +34,14 @@ const getCartByUser = async (user_id) => {
 
 // GET Cart items with product details + main image
 const getCartItemsWithProductDetails = async (cart_id) => {
-  const query = `SELECT 
+  const q = `
+    SELECT 
       ci.id AS cart_item_id,
       ci.product_id,
       ci.quantity,
       ci.price,
       ci.discount,
+      ci.product_options,
       p.name AS product_name,
       p.product_code,
       p.price_per_unit AS current_price,
@@ -56,50 +58,85 @@ const getCartItemsWithProductDetails = async (cart_id) => {
     ) pi ON TRUE
     WHERE ci.cart_id = $1
     ORDER BY ci.created_at DESC;
-    `;
-  const { rows } = await pool.query(query, [cart_id]);
+  `;
+  const { rows } = await pool.query(q, [cart_id]);
   return rows;
 };
 
-// Add or Update items in cart
-const addOrUpdateCartItem = async ({ cart_id, product_id, quantity }) => {
+// Add or Update items in cart (Variant-Aware)
+const addOrUpdateCartItem = async ({
+  cart_id,
+  product_id,
+  quantity,
+  product_options = {},
+}) => {
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
 
     // Validate product exists and get current price & stock quantity if needed
-    const prodQ = `SELECT id, price_per_unit, stock_quantity FROM products WHERE id = $1 LIMIT 1;`;
-    const prodRes = await client.query(prodQ, [product_id]);
-    if (prodRes.rows.length === 0)
+    const prod = await client.query(
+      `SELECT id, price_per_unit FROM products WHERE id = $1 LIMIT 1;`,
+      [product_id]
+    );
+    if (prod.rows.length === 0) {
       throw { status: 404, message: "Product not found" };
+    }
 
-    const product = prodRes.rows[0];
+    const product = prod.rows[0];
     const qty = parseInt(quantity, 10);
-    if (isNaN(qty) || qty <= 0)
-      throw { status: 400, message: "Quantity must be positive." };
+    if (isNaN(qty) || qty <= 0) {
+      throw { status: 400, message: "Quantity must be a positive number" };
+    }
 
-    const findQ = `SELECT * FROM cart_items WHERE cart_id = $1 AND product_id = $2 LIMIT 1;`;
-    const found = await client.query(findQ, [cart_id, product_id]);
+    // Important: Compare product_id + options
+    const findQ = `
+      SELECT * FROM cart_items
+      WHERE cart_id = $1 
+        AND product_id = $2
+        AND product_options = $3
+      LIMIT 1;
+    `;
+    const found = await client.query(findQ, [
+      cart_id,
+      product_id,
+      product_options,
+    ]);
 
     if (found.rows.length > 0) {
+      // Merge quantities for identical variants
       const existing = found.rows[0];
       const newQty = existing.quantity + qty;
-      const updateQ = `UPDATE cart_items SET quantity = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2 RETURNING *;`;
+
+      const updateQ = `
+        UPDATE cart_items 
+        SET quantity = $1, updated_at = CURRENT_TIMESTAMP
+        WHERE id = $2
+        RETURNING *;
+      `;
       const updated = await client.query(updateQ, [newQty, existing.id]);
+
       await client.query("COMMIT");
       return updated.rows[0];
-    } else {
-      const insertQ = `
-            INSERT INTO cart_items (cart_id, product_id, quantity, price, discount) VALUES ($1, $2, $3, $4, 0) RETURNING *;`;
-      const inserted = await client.query(insertQ, [
-        cart_id,
-        product_id,
-        qty,
-        product.price_per_unit,
-      ]);
-      await client.query("COMMIT");
-      return inserted.rows[0];
     }
+
+    // Insert new unique variant item
+    const insertQ = `
+      INSERT INTO cart_items 
+        (cart_id, product_id, quantity, price, discount, product_options)
+      VALUES ($1, $2, $3, $4, 0, $5)
+      RETURNING *;
+    `;
+    const inserted = await client.query(insertQ, [
+      cart_id,
+      product_id,
+      qty,
+      product.price_per_unit,
+      product_options,
+    ]);
+
+    await client.query("COMMIT");
+    return inserted.rows[0];
   } catch (err) {
     await client.query("ROLLBACK");
     throw err;
