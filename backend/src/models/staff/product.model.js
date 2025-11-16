@@ -147,20 +147,20 @@ async function getProductDetailsById(productId) {
   const query = `
     SELECT 
       p.id,
-      p.name AS "Product Name",
-      b.name AS "Brand",
-      p.product_code AS "Product Code",
-      p.description AS "Description",
-      p.stock_quantity AS "Stock Quantity",
-      p.quantity_per_unit AS "Quantity Per Unit",
-      p.price_per_unit AS "Price per unit",
-      p.quantity_bundle_max AS "Quantity Bundle Max",
-      p.price_bundle_max AS "Price Bundle Max",
-      p.quantity_bundle_ultra AS "Quantity Bundle Ultra",
-      p.price_bundle_ultra AS "Price Bundle Ultra",
-      p.weight_capacity AS "Weight Capacity",
-      p.product_dimension AS "Product Dimension",
-      p.warranty AS "Warranty",
+      p.name AS "product_name",
+      b.name AS "brand",
+      p.product_code AS "product_code",
+      p.description AS "description",
+      p.stock_quantity AS "stock_quantity",
+      p.quantity_per_unit AS "quantity_per_unit",
+      p.price_per_unit AS "price_per_unit",
+      p.quantity_bundle_max AS "quantity_bundle_max",
+      p.price_bundle_max AS "price_bundle_max",
+      p.quantity_bundle_ultra AS "quantity_bundle_ultra",
+      p.price_bundle_ultra AS "price_bundle_ultra",
+      p.weight_capacity AS "weight_capacity",
+      p.product_dimension AS "product_dimension",
+      p.warranty AS "warranty",
 
       -- Arrays for categories and colors
       ARRAY(
@@ -168,21 +168,21 @@ async function getProductDetailsById(productId) {
         FROM product_category pc
         JOIN categories c ON pc.category_id = c.id
         WHERE pc.product_id = p.id
-      ) AS "Product Category",
+      ) AS "product_category",
 
       ARRAY(
         SELECT cl.name
         FROM product_color pcl
         JOIN colors cl ON pcl.color_id = cl.id
         WHERE pcl.product_id = p.id
-      ) AS "Colour",
+      ) AS "colour",
 
       -- One-to-many attributes
-      ARRAY(SELECT h.text FROM highlights h WHERE h.product_id = p.id) AS "Highlights",
-      ARRAY(SELECT a.name FROM alloys a WHERE a.product_id = p.id) AS "Alloy",
-      ARRAY(SELECT u.name FROM usability u WHERE u.product_id = p.id) AS "Usability",
-      ARRAY(SELECT ibc.name FROM in_box_content ibc WHERE ibc.product_id = p.id) AS "In Box Content",
-      ARRAY(SELECT t.name FROM tags t WHERE t.product_id = p.id) AS "Tags"
+      ARRAY(SELECT h.text FROM highlights h WHERE h.product_id = p.id) AS "highlights",
+      ARRAY(SELECT a.name FROM alloys a WHERE a.product_id = p.id) AS "alloy",
+      ARRAY(SELECT u.name FROM usability u WHERE u.product_id = p.id) AS "usability",
+      ARRAY(SELECT ibc.name FROM in_box_content ibc WHERE ibc.product_id = p.id) AS "in_box_content",
+      ARRAY(SELECT t.name FROM tags t WHERE t.product_id = p.id) AS "tags"
 
     FROM products p
     LEFT JOIN brands b ON p.brand_id = b.id
