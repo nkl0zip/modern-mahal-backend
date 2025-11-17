@@ -10,7 +10,8 @@
     "test": "jest",
     "migrate": "cross-env DOTENV_CONFIG_PATH=./backend/.env node -r dotenv/config ./node_modules/node-pg-migrate/bin/node-pg-migrate.js up --migrations-dir ./backend/migrations",
     "migrate:down": "cross-env DOTENV_CONFIG_PATH=./backend/.env node -r dotenv/config ./node_modules/node-pg-migrate/bin/node-pg-migrate.js down --migrations-dir ./backend/migrations",
-    "migrate:make": "cross-env DOTENV_CONFIG_PATH=./backend/.env node -r dotenv/config ./node_modules/node-pg-migrate/bin/node-pg-migrate.js create --migrations-dir ./backend/migrations"
+    "migrate:make": "cross-env DOTENV_CONFIG_PATH=./backend/.env node -r dotenv/config ./node_modules/node-pg-migrate/bin/node-pg-migrate.js create --migrations-dir ./backend/migrations",
+    "migrate:render": "node ./node_modules/node-pg-migrate/bin/node-pg-migrate.js up --migrations-dir ./backend/migrations"
   },
   "keywords": [
     "nodejs",
