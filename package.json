@@ -9,7 +9,8 @@
     "lint": "eslint .",
     "test": "jest",
     "migrate": "node ./node_modules/node-pg-migrate/bin/node-pg-migrate.js up --migrations-dir ./backend/migrations",
-    "postdeploy": "npm run migrate"
+    "migrate-render": "node ./node_modules/node-pg-migrate/bin/node-pg-migrate.js up --migrations-dir ./backend/migrations --database $DATABASE_URL",
+    "postdeploy": "npm run migrate-render"
   },
   "keywords": [
     "nodejs",
