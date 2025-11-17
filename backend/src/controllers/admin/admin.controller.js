@@ -8,6 +8,8 @@ const {
 } = require("../../models/admin/admin.model");
 const { sendEmail } = require("../../utils/mailer");
 
+const { blacklistToken } = require("../../models/admin/token.model");
+
 // Store reset tokens temporarily in memory (for demo)
 // For production → use Redis or database table
 const resetTokens = new Map();
@@ -110,8 +112,29 @@ const resetPassword = async (req, res) => {
   }
 };
 
+// Logout Admin and Blacklist the token used by that admin till its expired
+const adminLogoutHandler = async (req, res, next) => {
+  try {
+    const token = req.token;
+    const decoded = req.user;
+
+    const expiresAt = new Date(decoded.exp * 1000);
+
+    await blacklistToken(token, expiresAt);
+
+    return res.status(200).json({
+      success: true,
+      message: "Admin logged out successfully.",
+    });
+  } catch (err) {
+    console.error("Admin Logout Error: ", err);
+    next(err);
+  }
+};
+
 module.exports = {
   adminLogin,
   requestPasswordReset,
   resetPassword,
+  adminLogoutHandler,
 };

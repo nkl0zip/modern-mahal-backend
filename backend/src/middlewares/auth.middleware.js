@@ -1,7 +1,11 @@
 const jwt = require("jsonwebtoken");
 const { jwtSecret } = require("../config/jwt");
+const { isTokenBlacklisted } = require("../models/admin/token.model");
 
-const authenticateToken = (req, res, next) => {
+/**
+ * Middleware: Validates JWT + checks blacklist tokens
+ */
+const authenticateToken = async (req, res, next) => {
   const authHeader = req.headers.authorization;
   if (!authHeader) {
     return res.status(401).json({ message: "Authorization header missing" });
@@ -13,8 +17,17 @@ const authenticateToken = (req, res, next) => {
   }
 
   try {
-    const user = jwt.verify(token, jwtSecret);
-    req.user = user;
+    // Check if token is blaclisted (logged out)
+    const blacklisted = await isTokenBlacklisted(token);
+    if (blacklisted)
+      return res
+        .status(401)
+        .json({ message: "Token is invalid (logged out)." });
+
+    const payload = jwt.verify(token, jwtSecret);
+
+    req.user = payload;
+    req.token = token;
     next();
   } catch (err) {
     return res.status(403).json({ message: "Invalid or expired token" });

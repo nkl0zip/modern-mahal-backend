@@ -2,6 +2,7 @@ const express = require("express");
 const cors = require("cors");
 const bodyParser = require("body-parser");
 require("dotenv").config();
+require("./jobs/cleanupTokens.job");
 
 const authRoutes = require("./routes/auth.routes");
 const profileRoutes = require("./routes/profile.routes");
@@ -15,6 +16,7 @@ const cartRoutes = require("./routes/cart.routes");
 const reviewRoutes = require("./routes/review.routes");
 const adminRoutes = require("./routes/admin/admin.routes");
 const staffRoutes = require("./routes/staff/staff.routes");
+const adminIpRoutes = require("./routes/admin/ip.routes");
 
 const errorHandler = require("./middlewares/error.middleware");
 
@@ -45,7 +47,25 @@ app.use("/api/cart", cartRoutes);
 app.use("/api/reviews", reviewRoutes);
 app.use("/api/admin", adminRoutes);
 app.use("/api/staff", staffRoutes);
+app.use("/api/admin/ips", adminIpRoutes);
 
 app.use(errorHandler);
+
+const os = require("os");
+
+// Get local network IP
+const getLocalIP = () => {
+  const interfaces = os.networkInterfaces();
+  for (const name of Object.keys(interfaces)) {
+    for (const iface of interfaces[name]) {
+      if (iface.family === "IPv4" && !iface.internal) {
+        return iface.address;
+      }
+    }
+  }
+  return "IP not found";
+};
+
+console.log("Server Local IP:", getLocalIP());
 
 module.exports = app;

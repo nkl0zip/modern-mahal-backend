@@ -3,7 +3,12 @@ const {
   adminLogin,
   requestPasswordReset,
   resetPassword,
+  adminLogoutHandler,
 } = require("../../controllers/admin/admin.controller");
+const {
+  authenticateToken,
+  requireRole,
+} = require("../../middlewares/auth.middleware");
 
 const router = express.Router();
 
@@ -15,5 +20,13 @@ router.post("/request-reset", requestPasswordReset);
 
 // POST /api/admin/reset-password
 router.post("/reset-password", resetPassword);
+
+// POST /api/admin/logout
+router.post(
+  "/logout",
+  authenticateToken,
+  requireRole("ADMIN"),
+  adminLogoutHandler
+);
 
 module.exports = router;

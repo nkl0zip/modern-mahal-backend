@@ -12,6 +12,9 @@ const {
   authenticateToken,
   requireRole,
 } = require("../../middlewares/auth.middleware");
+const {
+  staffLogoutHandler,
+} = require("../../controllers/staff/auth.controller");
 
 // All routes below require admin
 router.use(authenticateToken);
