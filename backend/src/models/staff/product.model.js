@@ -296,80 +296,133 @@ const getBrandsProductList = async (brand_id) => {
 /**
  * Model to fetch products by name (fuzzy) or product_id (exact)
  * Includes product image (display_order = 1), brand info, and essential fields.
+ * Paginated Fuzzy Search for products, where each Page holds 20 products
  */
-const getProductListBySearch = async ({ name, product_id }) => {
-  if (!name && !product_id) {
-    return [];
-  }
+const getProductListBySearch = async ({ name, page = 1, limit = 20 }) => {
+  if (!name) return { products: [], total_count: 0 };
 
-  let query;
-  let values;
+  const offset = (page - 1) * limit;
 
-  // Exact search by ID is unchanged
-  if (product_id) {
-    query = `
+  const searchTerm = name;
+
+  const fuzzyQuery = `
+    WITH ProductScores AS (
       SELECT
-        p.id AS product_id,
-        p.name AS product_name,
+        p.id,
+        p.name,
         p.product_code,
         p.price_per_unit,
-        b.name AS brand_name,
-        (
-          SELECT pi.media_url FROM products_image pi
-          WHERE pi.product_id = p.id AND pi.display_order = 1 LIMIT 1
-        ) AS product_image
+        p.brand_id,
+        
+        GREATEST(
+          similarity(p.name, $1),
+          similarity(p.description, $1),
+          COALESCE(similarity(b.name, $1), 0),
+          COALESCE((
+            SELECT MAX(similarity(c.name, $1))
+            FROM categories c
+            JOIN product_category pc ON c.id = pc.category_id
+            WHERE pc.product_id = p.id
+          ), 0)
+        ) AS score
       FROM products p
       LEFT JOIN brands b ON p.brand_id = b.id
-      WHERE p.id = $1;
-    `;
-    values = [product_id];
-  } else {
-    // UPDATED: Powerful fuzzy search query
-    query = `
-      WITH ProductScores AS (
-        SELECT
-          p.id,
-          p.name,
-          p.product_code,
-          p.price_per_unit,
-          p.brand_id,
-          -- Calculate a relevance score based on the highest similarity across multiple fields
-          GREATEST(
-            similarity(p.name, $1),
-            similarity(p.description, $1),
-            COALESCE(similarity(b.name, $1), 0),
-            COALESCE((
-              SELECT MAX(similarity(c.name, $1))
-              FROM categories c
-              JOIN product_category pc ON c.id = pc.category_id
-              WHERE pc.product_id = p.id
-            ), 0)
-          ) AS score
-        FROM products p
-        LEFT JOIN brands b ON p.brand_id = b.id
-      )
-      SELECT
-        ps.id AS product_id,
-        ps.name AS product_name,
-        ps.product_code,
-        ps.price_per_unit,
-        b.name AS brand_name,
-        (
-          SELECT pi.media_url FROM products_image pi
-          WHERE pi.product_id = ps.id AND pi.display_order = 1 LIMIT 1
-        ) AS product_image,
-        ps.score
-      FROM ProductScores ps
-      LEFT JOIN brands b ON ps.brand_id = b.id
-      WHERE ps.score > 0.1  -- The similarity threshold (adjustable)
-      ORDER BY ps.score DESC -- Show most relevant results first
-      LIMIT 20; -- Limit results for performance
-    `;
-    values = [name];
-  }
+    ),
 
-  const { rows } = await pool.query(query, values);
-  return rows;
+    Filtered AS (
+      SELECT *
+      FROM ProductScores
+      WHERE score > 0.1
+    ),
+
+    CountResult AS (
+      SELECT COUNT(*) AS total_count FROM Filtered
+    )
+
+    SELECT 
+      f.id AS product_id,
+      f.name AS product_name,
+      f.product_code,
+      f.price_per_unit,
+      b.name AS brand_name,
+      (
+        SELECT pi.media_url FROM products_image pi
+        WHERE pi.product_id = f.id
+        AND pi.display_order = 1 LIMIT 1
+      ) AS product_image,
+      f.score,
+      cr.total_count
+    FROM Filtered f
+    LEFT JOIN brands b ON f.brand_id = b.id
+    CROSS JOIN CountResult cr
+    ORDER BY f.score DESC
+    LIMIT $2 OFFSET $3;
+  `;
+
+  const values = [searchTerm, limit, offset];
+
+  const { rows } = await pool.query(fuzzyQuery, values);
+
+  if (!rows.length) return { products: [], total_count: 0 };
+
+  return {
+    products: rows.map((row) => ({
+      product_id: row.product_id,
+      product_name: row.product_name,
+      product_code: row.product_code,
+      price_per_unit: row.price_per_unit,
+      brand_name: row.brand_name,
+      product_image: row.product_image,
+      score: row.score,
+    })),
+    total_count: parseInt(rows[0].total_count, 10),
+  };
+};
+
+/**
+ * Product Overview for listing section (non-fuzzy)
+ * Returns essential product info only
+ */
+const getProductOverviewPaginated = async ({ page = 1, limit = 20 }) => {
+  const offset = (page - 1) * limit;
+
+  const query = `
+    WITH CountResult AS (
+      SELECT COUNT(*) AS total_count FROM products
+    )
+    SELECT
+      p.id AS product_id,
+      p.name AS product_name,
+      p.product_code,
+      p.price_per_unit,
+      b.name AS brand_name,
+      (
+        SELECT pi.media_url FROM products_image pi
+        WHERE pi.product_id = p.id AND pi.display_order = 1 LIMIT 1
+      ) AS product_image,
+      cr.total_count
+    FROM products p
+    LEFT JOIN brands b ON p.brand_id = b.id
+    CROSS JOIN CountResult cr
+    ORDER BY p.created_at DESC
+    LIMIT $1 OFFSET $2;
+  `;
+
+  const { rows } = await pool.query(query, [limit, offset]);
+
+  if (!rows.length) return { products: [], total_count: 0 };
+
+  return {
+    products: rows.map((row) => ({
+      product_id: row.product_id,
+      product_name: row.product_name,
+      product_code: row.product_code,
+      price_per_unit: row.price_per_unit,
+      brand_name: row.brand_name,
+      product_image: row.product_image,
+    })),
+    total_count: parseInt(rows[0].total_count, 10),
+  };
 };
 
 // Get Products By Category (name or ID)
@@ -441,4 +494,5 @@ module.exports = {
   getProductListBySearch,
   getProductDetailsById,
   getProductsByCategory,
+  getProductOverviewPaginated,
 };

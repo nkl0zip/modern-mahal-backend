@@ -13,6 +13,7 @@ const {
   getProductListBySearch,
   getProductDetailsById,
   getProductsByCategory,
+  getProductOverviewPaginated,
 } = require("../../models/staff/product.model");
 
 const uploadProductsFromExcel = async (req, res, next) => {
@@ -247,6 +248,11 @@ const createSingleProductHandler = async (req, res, next) => {
 };
 
 // GET /api/products
+/**
+ * This is to get All Product Details of all Products: Should not be used for Product Overview
+ * Refer to Pagination APIs for Product Listing with Overviews
+ */
+
 const getAllProductsHandler = async (req, res, next) => {
   try {
     const products = await getAllProductDetails();
@@ -315,32 +321,59 @@ const getBrandsProductListHandler = async (req, res, next) => {
 // To Fetch product list by name (fuzzy) or product_id (exact)
 const getProductListBySearchHandler = async (req, res, next) => {
   try {
-    const { name, product_id } = req.query;
+    const { name, page = 1 } = req.query;
 
-    // Validate input
-    if (!name && !product_id) {
+    if (!name) {
       return res.status(400).json({
-        message: "Please provide either 'name' or 'product_id' to search.",
+        message: "Search term 'name' is required.",
       });
     }
 
-    const products = await getProductListBySearch({ name, product_id });
+    const pageNum = parseInt(page, 10) || 1;
 
-    if (!products || products.length === 0) {
-      return res.status(404).json({
-        message: "No products found matching your criteria.",
-        products: [],
-      });
-    }
+    const { products, total_count } = await getProductListBySearch({
+      name,
+      page: pageNum,
+    });
 
-    res.status(200).json({
+    return res.status(200).json({
       message: "Products fetched successfully.",
-      count: products.length,
+      page: pageNum,
+      per_page: 20,
+      total_count,
+      total_pages: Math.ceil(total_count / 20),
+      next_page: pageNum * 20 < total_count ? pageNum + 1 : null,
+      prev_page: pageNum > 1 ? pageNum - 1 : null,
       products,
     });
-  } catch (err) {
-    console.error("Error fetching the product list: ", err);
-    next(err);
+  } catch (error) {
+    console.error("Error in paginated fuzzy search:", error);
+    next(error);
+  }
+};
+
+const getProductOverviewPaginatedHandler = async (req, res, next) => {
+  try {
+    const { page = 1 } = req.query;
+    const pageNum = parseInt(page, 10) || 1;
+
+    const { products, total_count } = await getProductOverviewPaginated({
+      page: pageNum,
+    });
+
+    return res.status(200).json({
+      message: "Product overview fetched.",
+      page: pageNum,
+      per_page: 20,
+      total_count,
+      total_pages: Math.ceil(total_count / 20),
+      next_page: pageNum * 20 < total_count ? pageNum + 1 : null,
+      prev_page: pageNum > 1 ? pageNum - 1 : null,
+      products,
+    });
+  } catch (error) {
+    console.error("Error fetching product overview:", error);
+    next(error);
   }
 };
 
@@ -413,4 +446,5 @@ module.exports = {
   getProductListBySearchHandler,
   getProductDetailsByIdHandler,
   getProductsByCategoryHandler,
+  getProductOverviewPaginatedHandler,
 };

@@ -10,6 +10,7 @@ const {
   getProductListBySearchHandler,
   getProductDetailsByIdHandler,
   getProductsByCategoryHandler,
+  getProductOverviewPaginatedHandler,
 } = require("../../controllers/staff/product.controller");
 
 // Configureing multer for excel upload
@@ -54,10 +55,14 @@ router.post("/", createSingleProductHandler);
 // Allowed for all roles
 router.get("/brands/:id", getBrandsProductListHandler);
 
-// Fuzzy Search GET /api/products/list?name=xyz
+// Fuzzy Search GET /api/products/list?name=xyz&page=1&limit=20
 // Fuzzy Search GET /api/products/list?product_id=uuid
 // Allowed for all roles
 router.get("/list", getProductListBySearchHandler);
+
+// Allowed for all roles
+// GET /api/products/overview?page=1&limit=20
+router.get("/overview", getProductOverviewPaginatedHandler);
 
 // Allowed for all roles
 // GET /api/products/:id

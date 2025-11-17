@@ -7,7 +7,10 @@
     "start": "node src/server.js",
     "dev": "nodemon src/server.js",
     "lint": "eslint .",
-    "test": "jest"
+    "test": "jest",
+    "migrate": "cross-env DOTENV_CONFIG_PATH=./backend/.env node -r dotenv/config ./node_modules/node-pg-migrate/bin/node-pg-migrate.js up --migrations-dir ./backend/migrations",
+    "migrate:down": "cross-env DOTENV_CONFIG_PATH=./backend/.env node -r dotenv/config ./node_modules/node-pg-migrate/bin/node-pg-migrate.js down --migrations-dir ./backend/migrations",
+    "migrate:make": "cross-env DOTENV_CONFIG_PATH=./backend/.env node -r dotenv/config ./node_modules/node-pg-migrate/bin/node-pg-migrate.js create --migrations-dir ./backend/migrations"
   },
   "keywords": [
     "nodejs",
@@ -26,7 +29,7 @@
     "body-parser": "^2.2.0",
     "cloudinary": "^1.41.3",
     "cors": "^2.8.5",
-    "dotenv": "^17.0.1",
+    "dotenv": "^17.2.3",
     "express": "^5.1.0",
     "google-auth-library": "^10.1.0",
     "jsonwebtoken": "^9.0.2",
@@ -42,8 +45,10 @@
     "xlsx": "^0.18.5"
   },
   "devDependencies": {
+    "cross-env": "^10.1.0",
     "eslint": "^8.54.0",
     "jest": "^29.7.0",
+    "node-pg-migrate": "^8.0.3",
     "nodemon": "^3.1.10",
     "supertest": "^6.3.3"
   }
