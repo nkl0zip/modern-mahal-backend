@@ -162,6 +162,19 @@ async function getProductDetailsById(productId) {
       p.product_dimension AS "product_dimension",
       p.warranty AS "warranty",
 
+      -- Array of product images/videos as JSON objects
+      ARRAY(
+        SELECT jsonb_build_object(
+          'id', pi.id,
+          'media_url', pi.media_url,
+          'media_type', pi.media_type,
+          'display_order', pi.display_order
+        )
+        FROM products_image pi
+        WHERE pi.product_id = p.id
+        ORDER BY pi.display_order ASC
+      ) AS "images",
+
       -- Arrays for categories and colors
       ARRAY(
         SELECT c.name
