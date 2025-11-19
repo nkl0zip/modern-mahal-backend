@@ -33,7 +33,7 @@ const getCartHandler = async (req, res, next) => {
     const cart = await getCartByUser(user_id);
     if (!cart) return res.status(404).json({ message: "Cart not found" });
 
-    const items = await getCartItemsWithProductDetails(cart.id);
+    const items = await getCartItemsWithProductDetails(cart.cart_id);
     const total = items.reduce(
       (acc, it) => acc + parseFloat(it.subtotal || 0),
       0

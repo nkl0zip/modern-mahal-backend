@@ -26,10 +26,23 @@ const findOrCreateCartByUser = async (user_id) => {
 };
 
 // GET CART BY USER
-const getCartByUser = async (user_id) => {
-  const query = `SELECT * FROM cart WHERE user_id = $1 LIMIT 1;`;
-  const { rows } = await pool.query(query, [user_id]);
-  return rows[0] || null;
+const getCartByUser = async (userId) => {
+  try {
+    const query = `
+      SELECT id AS cart_id, user_id, created_at, updated_at
+      FROM cart
+      WHERE user_id = $1
+      ORDER BY created_at DESC
+      LIMIT 1;
+    `;
+
+    const { rows } = await pool.query(query, [userId]);
+
+    return rows.length ? rows[0] : null;
+  } catch (err) {
+    console.error("Error fetching cart:", err);
+    throw err; // rethrow so the caller can handle it
+  }
 };
 
 // GET Cart items with product details + main image
@@ -76,7 +89,7 @@ const addOrUpdateCartItem = async ({
 
     // Validate product exists and get current price & stock quantity if needed
     const prod = await client.query(
-      `SELECT id, price_per_unit FROM products WHERE id = $1 LIMIT 1;`,
+      `SELECT id AS cart_item_id, price_per_unit FROM products WHERE id = $1 LIMIT 1;`,
       [product_id]
     );
     if (prod.rows.length === 0) {
@@ -109,11 +122,22 @@ const addOrUpdateCartItem = async ({
       const newQty = existing.quantity + qty;
 
       const updateQ = `
-        UPDATE cart_items 
+        UPDATE cart_items
         SET quantity = $1, updated_at = CURRENT_TIMESTAMP
         WHERE id = $2
-        RETURNING *;
+        RETURNING 
+        id AS cart_item_id,
+        cart_id,
+        product_id,
+        quantity,
+        price,
+        discount,
+        product_options,
+        created_at,
+        updated_at;
       `;
+
+      // const updateQ = `UPDATE cart_items SET quantity = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2 RETURNING *`;
       const updated = await client.query(updateQ, [newQty, existing.id]);
 
       await client.query("COMMIT");
@@ -161,7 +185,21 @@ const updateCartItemQuantity = async (cart_item_id, newQuantity) => {
       return delRes.rows[0] || null;
     }
 
-    const updateQ = `UPDATE cart_items SET quantity = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2 RETURNING *;`;
+    const updateQ = `
+  UPDATE cart_items
+  SET quantity = $1, updated_at = CURRENT_TIMESTAMP
+  WHERE id = $2
+  RETURNING
+    id AS cart_item_id,
+    cart_id,
+    product_id,
+    quantity,
+    price,
+    discount,
+    product_options,
+    created_at,
+    updated_at;
+`;
     const { rows } = await client.query(updateQ, [qty, cart_item_id]);
     await client.query("COMMIT");
     return rows[0] || null;
