@@ -438,61 +438,96 @@ const getProductOverviewPaginated = async ({ page = 1, limit = 20 }) => {
   };
 };
 
-// Get Products By Category (name or ID)
-const getProductsByCategory = async ({ category_id, category_name }) => {
-  if (!category_id && !category_name) return [];
-
-  let query;
-  let values;
-
-  // Search by category ID
-  if (category_id) {
-    query = `
-      SELECT
-        p.id AS product_id,
-        p.name AS product_name,
-        p.product_code,
-        p.price_per_unit,
-        b.name AS brand_name,
-        (
-          SELECT pi.media_url FROM products_image pi
-          WHERE pi.product_id = p.id AND pi.display_order = 1
-          LIMIT 1
-        ) AS product_image
-      FROM products p
-      JOIN product_category pc ON pc.product_id = p.id
-      JOIN categories c ON c.id = pc.category_id
-      LEFT JOIN brands b ON p.brand_id = b.id
-      WHERE c.id = $1
-      ORDER BY p.created_at DESC;
-    `;
-    values = [category_id];
-  } else {
-    // Search by category NAME
-    query = `
-      SELECT
-        p.id AS product_id,
-        p.name AS product_name,
-        p.product_code,
-        p.price_per_unit,
-        b.name AS brand_name,
-        (
-          SELECT pi.media_url FROM products_image pi
-          WHERE pi.product_id = p.id AND pi.display_order = 1
-          LIMIT 1
-        ) AS product_image
-      FROM products p
-      JOIN product_category pc ON pc.product_id = p.id
-      JOIN categories c ON c.id = pc.category_id
-      LEFT JOIN brands b ON p.brand_id = b.id
-      WHERE LOWER(c.name) = LOWER($1)
-      ORDER BY p.created_at DESC;
-    `;
-    values = [category_name];
+/**
+ * Paginated product listing by category (ID or Name)
+ * Returns product overview data with:
+ * - product_id
+ * - name
+ * - brand_name
+ * - main image
+ * - price_per_unit
+ * - total_count for pagination
+ */
+const getProductsByCategory = async ({
+  category_id,
+  category_name,
+  page = 1,
+  limit = 20,
+}) => {
+  if (!category_id && !category_name) {
+    return { products: [], total_count: 0 };
   }
 
-  const { rows } = await pool.query(query, values);
-  return rows;
+  const offset = (page - 1) * limit;
+
+  let whereClause = "";
+  let values = [];
+
+  if (category_id) {
+    whereClause = `WHERE c.id = $1`;
+    values.push(category_id);
+  } else {
+    whereClause = `WHERE LOWER(c.name) = LOWER($1)`;
+    values.push(category_name);
+  }
+
+  const paginatedQuery = `
+    WITH FilteredProducts AS (
+      SELECT
+        p.id,
+        p.name,
+        p.product_code,
+        p.price_per_unit,
+        p.brand_id,
+        (
+          SELECT pi.media_url
+          FROM products_image pi
+          WHERE pi.product_id = p.id
+          AND pi.display_order = 1
+          LIMIT 1
+        ) AS product_image
+      FROM products p
+      JOIN product_category pc ON pc.product_id = p.id
+      JOIN categories c ON c.id = pc.category_id
+      ${whereClause}
+    ),
+
+    CountResult AS (
+      SELECT COUNT(*) AS total_count FROM FilteredProducts
+    )
+
+    SELECT
+      fp.id AS product_id,
+      fp.name AS product_name,
+      fp.product_code,
+      fp.price_per_unit,
+      b.name AS brand_name,
+      fp.product_image,
+      cr.total_count
+    FROM FilteredProducts fp
+    LEFT JOIN brands b ON fp.brand_id = b.id
+    CROSS JOIN CountResult cr
+    ORDER BY fp.name ASC
+    LIMIT $2 OFFSET $3;
+  `;
+
+  const { rows } = await pool.query(paginatedQuery, [...values, limit, offset]);
+
+  if (!rows.length) {
+    return { products: [], total_count: 0 };
+  }
+
+  return {
+    products: rows.map((row) => ({
+      product_id: row.product_id,
+      product_name: row.product_name,
+      product_code: row.product_code,
+      price_per_unit: row.price_per_unit,
+      brand_name: row.brand_name,
+      product_image: row.product_image,
+    })),
+    total_count: parseInt(rows[0].total_count, 10),
+  };
 };
 
 module.exports = {

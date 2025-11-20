@@ -406,7 +406,7 @@ const getProductDetailsByIdHandler = async (req, res, next) => {
 
 const getProductsByCategoryHandler = async (req, res, next) => {
   try {
-    const { id, name } = req.query;
+    const { id, name, page = 1 } = req.query;
 
     if (!id && !name) {
       return res.status(400).json({
@@ -414,9 +414,13 @@ const getProductsByCategoryHandler = async (req, res, next) => {
       });
     }
 
-    const products = await getProductsByCategory({
+    const pageNum = parseInt(page, 10) || 1;
+
+    const { products, total_count } = await getProductsByCategory({
       category_id: id,
       category_name: name,
+      page: pageNum,
+      limit: 20,
     });
 
     if (!products || products.length === 0) {
@@ -426,13 +430,18 @@ const getProductsByCategoryHandler = async (req, res, next) => {
       });
     }
 
-    res.status(200).json({
-      message: "Products fetched successfully.",
-      count: products.length,
+    return res.status(200).json({
+      message: "Category products fetched successfully.",
+      page: pageNum,
+      per_page: 20,
+      total_count,
+      total_pages: Math.ceil(total_count / 20),
+      next_page: pageNum * 20 < total_count ? pageNum + 1 : null,
+      prev_page: pageNum > 1 ? pageNum - 1 : null,
       products,
     });
   } catch (error) {
-    console.error("Error fetching products by category:", error);
+    console.error("Error fetching category products (paginated):", error);
     next(error);
   }
 };
