@@ -41,7 +41,7 @@ router.post("/upload-excel", upload.single("file"), uploadProductsFromExcel);
 router.get("/", getAllProductsHandler);
 
 // Allowed for all roles
-// GET /api/products/category?name=xyz OR ?id=uuid
+// GET /api/products/category?name=xyz&page=1 OR ?id=uuid&page=1
 router.get("/category", getProductsByCategoryHandler);
 
 // GET /api/products/search?name= or /api/products/search?code=
@@ -51,7 +51,7 @@ router.get("/search", searchProductsHandler);
 // Allowed for ADMIN/STAFF for uploading a single product detail manually
 router.post("/", createSingleProductHandler);
 
-// GET /api/products/brands/:id
+// GET /api/products/brands/:id?page=1
 // Allowed for all roles
 router.get("/brands/:id", getBrandsProductListHandler);
 

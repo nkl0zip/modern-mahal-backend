@@ -297,24 +297,42 @@ const searchProductsHandler = async (req, res, next) => {
 const getBrandsProductListHandler = async (req, res, next) => {
   try {
     const { id } = req.params;
+    const { page = 1 } = req.query;
 
-    if (!id)
-      return res.status(400).json({ message: "This Brand is not found" });
-
-    const products = await getBrandsProductList(id);
-
-    if (!products || products.length === 0) {
-      return res
-        .status(400)
-        .json({ message: "No Products Found with this brand", products: [] });
+    if (!id) {
+      return res.status(400).json({ message: "Brand ID is required" });
     }
 
-    res.status(200).json({
-      message: "Sucessfully fetched Products",
+    const pageNum = parseInt(page, 10) || 1;
+
+    const { products, total_count, brand_name } = await getBrandsProductList({
+      brand_id: id,
+      page: pageNum,
+      limit: 20,
+    });
+
+    if (!products || products.length === 0) {
+      return res.status(404).json({
+        message: "No products found for this brand.",
+        brand_name,
+        products: [],
+      });
+    }
+
+    return res.status(200).json({
+      message: "Brand products fetched successfully.",
+      brand_name,
+      page: pageNum,
+      per_page: 20,
+      total_count,
+      total_pages: Math.ceil(total_count / 20),
+      next_page: pageNum * 20 < total_count ? pageNum + 1 : null,
+      prev_page: pageNum > 1 ? pageNum - 1 : null,
       products,
     });
-  } catch (err) {
-    next(err);
+  } catch (error) {
+    console.error("Error fetching brand products:", error);
+    next(error);
   }
 };
 

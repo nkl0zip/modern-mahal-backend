@@ -293,17 +293,77 @@ async function searchProducts({ name, code }) {
   return result.rows;
 }
 
-// Get Product List of a particular Brand
-const getBrandsProductList = async (brand_id) => {
+/**
+ * Paginated product listing by Brand (ID)
+ * Returns product overview data with:
+ * - product_id
+ * - product_name
+ * - brand_name
+ * - main image
+ * - price_per_unit
+ * - product_code
+ * - total_count for pagination
+ */
+const getBrandsProductList = async ({ brand_id, page = 1, limit = 20 }) => {
+  if (!brand_id) return { products: [], total_count: 0, brand_name: null };
+
+  const offset = (page - 1) * limit;
+
   const query = `
-    SELECT p.id AS "Product Id",
-    p.name AS "Product Name",
-    p.product_code AS "product_code",
-    p.price_per_unit AS "Price per unit"
-    FROM products p WHERE p.brand_id = $1 ORDER BY p.created_at DESC;
+    WITH BrandInfo AS (
+      SELECT name AS brand_name FROM brands WHERE id = $1 LIMIT 1
+    ),
+
+    FilteredProducts AS (
+      SELECT
+        p.id,
+        p.name,
+        p.product_code,
+        p.price_per_unit,
+        (
+          SELECT pi.media_url
+          FROM products_image pi
+          WHERE pi.product_id = p.id AND pi.display_order = 1
+          LIMIT 1
+        ) AS product_image
+      FROM products p
+      WHERE p.brand_id = $1
+    ),
+
+    CountResult AS (
+      SELECT COUNT(*) AS total_count FROM FilteredProducts
+    )
+
+    SELECT
+      fp.id AS product_id,
+      fp.name AS product_name,
+      fp.product_code,
+      fp.price_per_unit,
+      fp.product_image,
+      b.brand_name,
+      cr.total_count
+    FROM FilteredProducts fp
+    CROSS JOIN BrandInfo b
+    CROSS JOIN CountResult cr
+    ORDER BY fp.name ASC
+    LIMIT $2 OFFSET $3;
   `;
-  const result = await pool.query(query, [brand_id]);
-  return result.rows;
+
+  const { rows } = await pool.query(query, [brand_id, limit, offset]);
+
+  if (!rows.length) return { products: [], total_count: 0, brand_name: null };
+
+  return {
+    brand_name: rows[0].brand_name,
+    products: rows.map((row) => ({
+      product_id: row.product_id,
+      product_name: row.product_name,
+      product_code: row.product_code,
+      price_per_unit: row.price_per_unit,
+      product_image: row.product_image,
+    })),
+    total_count: parseInt(rows[0].total_count, 10),
+  };
 };
 
 /**
