@@ -1,0 +1,260 @@
+const pool = require("../../config/db");
+
+const TicketModel = {
+  async createTicket({ user_id, title, type, message, priority }) {
+    const sql = `
+      INSERT INTO tickets (user_id, title, type, message, priority)
+      VALUES ($1, $2, $3, $4, $5)
+      RETURNING *;
+    `;
+    const { rows } = await pool.query(sql, [
+      user_id,
+      title,
+      type,
+      message,
+      priority || null,
+    ]);
+    return rows[0];
+  },
+
+  async getTicketById(id) {
+    const sql = `SELECT * FROM tickets WHERE id = $1 AND is_deleted = false;`;
+    const { rows } = await pool.query(sql, [id]);
+    return rows[0];
+  },
+
+  async listUserTickets(user_id, { limit = 20, offset = 0 } = {}) {
+    const sql = `
+      SELECT * FROM tickets
+      WHERE user_id = $1 AND is_deleted = false
+      ORDER BY created_at DESC
+      LIMIT $2 OFFSET $3;
+    `;
+    const { rows } = await pool.query(sql, [user_id, limit, offset]);
+    return rows;
+  },
+
+  async softDeleteTicket(id, user_id) {
+    const sql = `
+      UPDATE tickets
+      SET is_deleted = true, deleted_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
+      WHERE id = $1 AND user_id = $2
+      RETURNING *;
+    `;
+    const { rows } = await pool.query(sql, [id, user_id]);
+    return rows[0];
+  },
+
+  async addAttachment({
+    ticket_id,
+    uploaded_by,
+    file_url,
+    file_name,
+    file_size_bytes,
+    mime_type,
+    cloudinary_public_id,
+  }) {
+    const sql = `
+      INSERT INTO ticket_attachments (ticket_id, uploaded_by, file_url, file_name, file_size_bytes, mime_type, cloudinary_public_id)
+      VALUES ($1,$2,$3,$4,$5,$6,$7)
+      RETURNING *;
+    `;
+    const { rows } = await pool.query(sql, [
+      ticket_id,
+      uploaded_by || null,
+      file_url,
+      file_name || null,
+      file_size_bytes || null,
+      mime_type || null,
+      cloudinary_public_id || null,
+    ]);
+    return rows[0];
+  },
+
+  async createActivity({ ticket_id, actor_id, action, action_data = {} }) {
+    const sql = `
+      INSERT INTO ticket_activity (ticket_id, actor_id, action, action_data)
+      VALUES ($1, $2, $3, $4)
+      RETURNING *;
+    `;
+    const { rows } = await pool.query(sql, [
+      ticket_id,
+      actor_id || null,
+      action,
+      action_data,
+    ]);
+    return rows[0];
+  },
+
+  async createAssignment({ ticket_id, staff_id, assigned_by }) {
+    const sql = `
+      INSERT INTO ticket_assignments (ticket_id, staff_id, assigned_by)
+      VALUES ($1, $2, $3)
+      RETURNING *;
+    `;
+    const { rows } = await pool.query(sql, [
+      ticket_id,
+      staff_id,
+      assigned_by || null,
+    ]);
+    return rows[0];
+  },
+
+  async endAssignment(assignmentId) {
+    // set ended_at, calculate resolution_seconds
+    const sql = `
+      UPDATE ticket_assignments
+      SET ended_at = CURRENT_TIMESTAMP,
+          resolution_seconds = EXTRACT(EPOCH FROM (CURRENT_TIMESTAMP - assigned_at))::bigint,
+          active = false
+      WHERE id = $1 AND active = true
+      RETURNING *;
+    `;
+    const { rows } = await pool.query(sql, [assignmentId]);
+    return rows[0];
+  },
+
+  async deactivateActiveAssignmentsForTicket(ticket_id) {
+    const sql = `
+      UPDATE ticket_assignments
+      SET ended_at = CURRENT_TIMESTAMP,
+          resolution_seconds = EXTRACT(EPOCH FROM (CURRENT_TIMESTAMP - assigned_at))::bigint,
+          active = false
+      WHERE ticket_id = $1 AND active = true
+      RETURNING *;
+    `;
+    const { rows } = await pool.query(sql, [ticket_id]);
+    return rows;
+  },
+
+  async updateTicketAssignedStaff(ticket_id, staff_id) {
+    const sql = `
+      UPDATE tickets
+      SET assigned_staff_id = $2, updated_at = CURRENT_TIMESTAMP
+      WHERE id = $1
+      RETURNING *;
+    `;
+    const { rows } = await pool.query(sql, [ticket_id, staff_id]);
+    return rows[0];
+  },
+
+  async updateTicketStatus(ticket_id, status, closed = false) {
+    const sql = `
+      UPDATE tickets
+      SET status = $2,
+          closed_at = CASE WHEN $3 THEN CURRENT_TIMESTAMP ELSE closed_at END,
+          updated_at = CURRENT_TIMESTAMP
+      WHERE id = $1
+      RETURNING *;
+    `;
+    const { rows } = await pool.query(sql, [ticket_id, status, closed]);
+    return rows[0];
+  },
+
+  async getActiveAssignmentForTicket(ticket_id) {
+    const sql = `
+      SELECT * FROM ticket_assignments
+      WHERE ticket_id = $1 AND active = true
+      ORDER BY assigned_at DESC
+      LIMIT 1;
+    `;
+    const { rows } = await pool.query(sql, [ticket_id]);
+    return rows[0];
+  },
+
+  async getAssignmentsSumSeconds(ticket_id) {
+    const sql = `
+      SELECT COALESCE(SUM(resolution_seconds),0)::bigint as total_seconds
+      FROM ticket_assignments
+      WHERE ticket_id = $1;
+    `;
+    const { rows } = await pool.query(sql, [ticket_id]);
+    return rows[0].total_seconds;
+  },
+
+  async updateTicketTotalResolutionSeconds(ticket_id, seconds) {
+    const sql = `
+      UPDATE tickets
+      SET total_resolution_seconds = $2, updated_at = CURRENT_TIMESTAMP
+      WHERE id = $1
+      RETURNING *;
+    `;
+    const { rows } = await pool.query(sql, [ticket_id, seconds]);
+    return rows[0];
+  },
+
+  async listAllTickets({ filter = {}, limit = 50, offset = 0 } = {}) {
+    // Basic filter support (status, assigned_staff_id, type)
+    const conditions = ["is_deleted = false"];
+    const params = [];
+    let idx = 1;
+
+    if (filter.status) {
+      conditions.push(`status = $${idx++}`);
+      params.push(filter.status);
+    }
+    if (filter.assigned_staff_id) {
+      conditions.push(`assigned_staff_id = $${idx++}`);
+      params.push(filter.assigned_staff_id);
+    }
+    if (filter.type) {
+      conditions.push(`type = $${idx++}`);
+      params.push(filter.type);
+    }
+    if (filter.search) {
+      conditions.push(`(title ILIKE $${idx} OR message ILIKE $${idx})`);
+      params.push(`%${filter.search}%`);
+      idx++;
+    }
+
+    const where = conditions.length ? `WHERE ${conditions.join(" AND ")}` : "";
+    const sql = `
+      SELECT * FROM tickets
+      ${where}
+      ORDER BY created_at DESC
+      LIMIT $${idx++} OFFSET $${idx++};
+    `;
+    params.push(limit, offset);
+    const { rows } = await pool.query(sql, params);
+    return rows;
+  },
+
+  async getTicketActivities(ticket_id) {
+    const sql = `
+      SELECT * FROM ticket_activity
+      WHERE ticket_id = $1
+      ORDER BY created_at ASC;
+    `;
+    const { rows } = await pool.query(sql, [ticket_id]);
+    return rows;
+  },
+
+  async getTicketAttachments(ticket_id) {
+    const sql = `
+      SELECT * FROM ticket_attachments
+      WHERE ticket_id = $1
+      ORDER BY created_at ASC;
+    `;
+    const { rows } = await pool.query(sql, [ticket_id]);
+    return rows;
+  },
+
+  async getStaffStats(staff_id) {
+    // solved and unsolved counts and avg resolution
+    const sql = `
+      SELECT
+        SUM(CASE WHEN t.status = 'SOLVED' THEN 1 ELSE 0 END) as solved_count,
+        SUM(CASE WHEN t.status != 'SOLVED' THEN 1 ELSE 0 END) as unsolved_count,
+        CASE WHEN SUM(CASE WHEN t.status = 'SOLVED' THEN 1 ELSE 0 END) = 0 THEN NULL
+             ELSE AVG(t.total_resolution_seconds)::numeric END as avg_resolution_seconds
+      FROM tickets t
+      WHERE t.assigned_staff_id = $1;
+    `;
+    const { rows } = await pool.query(sql, [staff_id]);
+    return rows[0];
+  },
+
+  // Additional helper: create activity in the same transaction scope (not necessary but convenience)
+};
+
+module.exports = TicketModel;
