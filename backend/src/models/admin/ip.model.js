@@ -128,10 +128,9 @@ const findStaffIpAccess = async ({ staff_id, ip_address }) => {
   return rows[0] || null;
 };
 
-const listStaffIpAccess = async (staff_id) => {
+const listStaffIpAccess = async () => {
   const { rows } = await pool.query(
-    `SELECT * FROM staff_ip_access WHERE staff_id = $1 ORDER BY created_at DESC;`,
-    [staff_id]
+    `SELECT * FROM staff_ip_access ORDER BY created_at DESC;`
   );
   return rows;
 };

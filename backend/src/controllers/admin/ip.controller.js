@@ -133,11 +133,10 @@ const rejectRequestHandler = async (req, res, next) => {
  */
 const listStaffAccessHandler = async (req, res, next) => {
   try {
-    const staff_id = req.params.staff_id || req.query.staff_id || req.user.id;
-    const rows = await ipModel.listStaffIpAccess(staff_id);
+    const rows = await ipModel.listStaffIpAccess();
     res.status(200).json({ success: true, count: rows.length, access: rows });
   } catch (error) {
-    console.error("listSraffAccessHandler: ", error);
+    console.error("listStaffAccessHandler: ", error);
     next(error);
   }
 };

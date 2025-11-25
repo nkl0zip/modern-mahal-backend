@@ -55,7 +55,7 @@ router.post("/requests/:id/reject", ipCtrl.rejectRequestHandler);
 
 // List approved IPs of a STAFF
 // GET: /api/admin/ips/staff-access/:staff_id?
-router.get("/staff-access/:staff_id", ipCtrl.listStaffAccessHandler);
+router.get("/staff-access", ipCtrl.listStaffAccessHandler);
 
 // Remove approved IP of a Staff
 // DELETE: /api/admin/ips/staff-access/:id
