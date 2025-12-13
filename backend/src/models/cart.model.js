@@ -1,20 +1,28 @@
 const pool = require("../config/db");
 
-// Ensure that user has a cart. If not, then create
+/* ----------------------------------------
+   Ensure cart exists
+-----------------------------------------*/
 const findOrCreateCartByUser = async (user_id) => {
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
-    const findQ = `SELECT * FROM cart WHERE user_id = $1 LIMIT 1;`;
-    const found = await client.query(findQ, [user_id]);
 
-    if (found.rows.length > 0) {
+    const found = await client.query(
+      `SELECT * FROM cart WHERE user_id = $1 LIMIT 1`,
+      [user_id]
+    );
+
+    if (found.rows.length) {
       await client.query("COMMIT");
       return found.rows[0];
     }
 
-    const insertQ = `INSERT INTO cart (user_id) VALUES ($1) RETURNING *;`;
-    const inserted = await client.query(insertQ, [user_id]);
+    const inserted = await client.query(
+      `INSERT INTO cart (user_id) VALUES ($1) RETURNING *`,
+      [user_id]
+    );
+
     await client.query("COMMIT");
     return inserted.rows[0];
   } catch (err) {
@@ -25,139 +33,125 @@ const findOrCreateCartByUser = async (user_id) => {
   }
 };
 
-// GET CART BY USER
-const getCartByUser = async (userId) => {
-  try {
-    const query = `
-      SELECT id AS cart_id, user_id, created_at, updated_at
-      FROM cart
-      WHERE user_id = $1
-      ORDER BY created_at DESC
-      LIMIT 1;
-    `;
-
-    const { rows } = await pool.query(query, [userId]);
-
-    return rows.length ? rows[0] : null;
-  } catch (err) {
-    console.error("Error fetching cart:", err);
-    throw err; // rethrow so the caller can handle it
-  }
+/* ----------------------------------------
+   Get cart by user
+-----------------------------------------*/
+const getCartByUser = async (user_id) => {
+  const { rows } = await pool.query(
+    `SELECT * FROM cart WHERE user_id = $1 LIMIT 1`,
+    [user_id]
+  );
+  return rows[0] || null;
 };
 
-// GET Cart items with product details + main image
+/* ----------------------------------------
+   Fetch cart items with variant + product
+-----------------------------------------*/
 const getCartItemsWithProductDetails = async (cart_id) => {
-  const q = `
-    SELECT 
+  const query = `
+    SELECT
       ci.id AS cart_item_id,
-      ci.product_id,
       ci.quantity,
-      ci.price,
-      ci.discount,
-      ci.product_options,
+      ci.unit_price_snapshot,
+      (ci.quantity * ci.unit_price_snapshot) AS subtotal,
+
+      pv.id AS variant_id,
+      pv.sub_code,
+      pv.mrp,
+
+      p.id AS product_id,
       p.name AS product_name,
       p.product_code,
-      p.price_per_unit AS current_price,
-      pi.media_url AS product_image,
-      (ci.quantity * ci.price) AS subtotal
+
+      cl.name AS colour,
+      f.name AS finish,
+
+      pi.media_url AS product_image
+
     FROM cart_items ci
-    JOIN products p ON ci.product_id = p.id
+    JOIN product_variants pv ON pv.id = ci.variant_id
+    JOIN products p ON p.id = pv.product_id
+    LEFT JOIN colours cl ON cl.id = pv.colour_id
+    LEFT JOIN finishes f ON f.id = pv.finish_id
+
     LEFT JOIN LATERAL (
       SELECT media_url
       FROM products_image
-      WHERE product_id = p.id AND media_type = 'image'
-      ORDER BY display_order ASC
+      WHERE product_id = p.id
+        AND display_order = 1
       LIMIT 1
     ) pi ON TRUE
+
     WHERE ci.cart_id = $1
     ORDER BY ci.created_at DESC;
   `;
-  const { rows } = await pool.query(q, [cart_id]);
+
+  const { rows } = await pool.query(query, [cart_id]);
   return rows;
 };
 
-// Add or Update items in cart (Variant-Aware)
-const addOrUpdateCartItem = async ({
-  cart_id,
-  product_id,
-  quantity,
-  product_options = {},
-}) => {
+/* ----------------------------------------
+   Add or update cart item (VARIANT)
+-----------------------------------------*/
+const addOrUpdateCartItem = async ({ cart_id, variant_id, quantity }) => {
   const client = await pool.connect();
+
   try {
     await client.query("BEGIN");
 
-    // Validate product exists and get current price & stock quantity if needed
-    const prod = await client.query(
-      `SELECT id AS cart_item_id, price_per_unit FROM products WHERE id = $1 LIMIT 1;`,
-      [product_id]
-    );
-    if (prod.rows.length === 0) {
-      throw { status: 404, message: "Product not found" };
-    }
-
-    const product = prod.rows[0];
     const qty = parseInt(quantity, 10);
-    if (isNaN(qty) || qty <= 0) {
-      throw { status: 400, message: "Quantity must be a positive number" };
-    }
+    if (!qty || qty <= 0)
+      throw { status: 400, message: "Quantity must be positive" };
 
-    // Important: Compare product_id + options
-    const findQ = `
+    // Validate variant & get price
+    const variantRes = await client.query(
+      `SELECT id, mrp FROM product_variants WHERE id = $1 LIMIT 1`,
+      [variant_id]
+    );
+
+    if (!variantRes.rows.length)
+      throw { status: 404, message: "Variant not found" };
+
+    const variant = variantRes.rows[0];
+
+    // Check if variant already in cart
+    const existing = await client.query(
+      `
       SELECT * FROM cart_items
-      WHERE cart_id = $1 
-        AND product_id = $2
-        AND product_options = $3
-      LIMIT 1;
-    `;
-    const found = await client.query(findQ, [
-      cart_id,
-      product_id,
-      product_options,
-    ]);
+      WHERE cart_id = $1 AND variant_id = $2
+      LIMIT 1
+      `,
+      [cart_id, variant_id]
+    );
 
-    if (found.rows.length > 0) {
-      // Merge quantities for identical variants
-      const existing = found.rows[0];
-      const newQty = existing.quantity + qty;
+    if (existing.rows.length) {
+      const newQty = existing.rows[0].quantity + qty;
 
-      const updateQ = `
+      const updated = await client.query(
+        `
         UPDATE cart_items
-        SET quantity = $1, updated_at = CURRENT_TIMESTAMP
+        SET quantity = $1,
+            updated_at = CURRENT_TIMESTAMP
         WHERE id = $2
-        RETURNING 
-        id AS cart_item_id,
-        cart_id,
-        product_id,
-        quantity,
-        price,
-        discount,
-        product_options,
-        created_at,
-        updated_at;
-      `;
-
-      // const updateQ = `UPDATE cart_items SET quantity = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2 RETURNING *`;
-      const updated = await client.query(updateQ, [newQty, existing.id]);
+        RETURNING *;
+        `,
+        [newQty, existing.rows[0].id]
+      );
 
       await client.query("COMMIT");
       return updated.rows[0];
     }
 
-    // Insert new unique variant item
-    const insertQ = `
-      INSERT INTO cart_items 
-        (cart_id, product_id, quantity, price, discount, product_options)
-      VALUES ($1, $2, $3, $4, 0, $5)
+    // Insert new cart item
+    const inserted = await client.query(
+      `
+      INSERT INTO cart_items
+        (cart_id, variant_id, quantity, unit_price_snapshot)
+      VALUES ($1, $2, $3, $4)
       RETURNING *;
-    `;
-    const inserted = await client.query(insertQ, [
-      cart_id,
-      product_id,
-      qty,
-      product.price_per_unit,
-      product_options,
-    ]);
+      `,
+      [cart_id, variant_id, qty, variant.mrp]
+    );
 
     await client.query("COMMIT");
     return inserted.rows[0];
@@ -169,63 +163,56 @@ const addOrUpdateCartItem = async ({
   }
 };
 
-// UPDATE ITEM QUANTITY (SET)
-const updateCartItemQuantity = async (cart_item_id, newQuantity) => {
-  const client = await pool.connect();
-  try {
-    await client.query("BEGIN");
-    const qty = parseInt(newQuantity, 10);
-    if (isNaN(qty) || qty < 0)
-      throw { status: 400, message: "Quantity invalid." };
+/* ----------------------------------------
+   Update quantity (set)
+-----------------------------------------*/
+const updateCartItemQuantity = async (cart_item_id, quantity) => {
+  const qty = parseInt(quantity, 10);
+  if (isNaN(qty) || qty < 0) throw { status: 400, message: "Invalid quantity" };
 
-    if (qty === 0) {
-      const delQ = `DELETE FROM cart_items WHERE id = $1 RETURNING *;`;
-      const delRes = await client.query(delQ, [cart_item_id]);
-      await client.query("COMMIT");
-      return delRes.rows[0] || null;
-    }
-
-    const updateQ = `
-  UPDATE cart_items
-  SET quantity = $1, updated_at = CURRENT_TIMESTAMP
-  WHERE id = $2
-  RETURNING
-    id AS cart_item_id,
-    cart_id,
-    product_id,
-    quantity,
-    price,
-    discount,
-    product_options,
-    created_at,
-    updated_at;
-`;
-    const { rows } = await client.query(updateQ, [qty, cart_item_id]);
-    await client.query("COMMIT");
+  if (qty === 0) {
+    const { rows } = await pool.query(
+      `DELETE FROM cart_items WHERE id = $1 RETURNING *`,
+      [cart_item_id]
+    );
     return rows[0] || null;
-  } catch (err) {
-    await client.query("ROLLBACK");
-    throw err;
-  } finally {
-    client.release();
   }
-};
 
-// REMOVE CART ITEM
-const removeCartItem = async (cart_item_id) => {
-  const query = `DELETE FROM cart_items WHERE id = $1 RETURNING *;`;
-  const { rows } = await pool.query(query, [cart_item_id]);
+  const { rows } = await pool.query(
+    `
+    UPDATE cart_items
+    SET quantity = $1,
+        updated_at = CURRENT_TIMESTAMP
+    WHERE id = $2
+    RETURNING *;
+    `,
+    [qty, cart_item_id]
+  );
+
   return rows[0] || null;
 };
 
-// CLEAR ENTIRE CART
+/* ----------------------------------------
+   Remove item
+-----------------------------------------*/
+const removeCartItem = async (cart_item_id) => {
+  const { rows } = await pool.query(
+    `DELETE FROM cart_items WHERE id = $1 RETURNING *`,
+    [cart_item_id]
+  );
+  return rows[0] || null;
+};
+
+/* ----------------------------------------
+   Clear cart
+-----------------------------------------*/
 const clearCart = async (cart_id) => {
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
-    await client.query(`DELETE FROM cart_items WHERE cart_id = $1;`, [cart_id]);
+    await client.query(`DELETE FROM cart_items WHERE cart_id = $1`, [cart_id]);
     await client.query(
-      `UPDATE cart SET updated_at = CURRENT_TIMESTAMP WHERE id = $1;`,
+      `UPDATE cart SET updated_at = CURRENT_TIMESTAMP WHERE id = $1`,
       [cart_id]
     );
     await client.query("COMMIT");

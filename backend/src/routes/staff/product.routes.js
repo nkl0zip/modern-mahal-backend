@@ -1,3 +1,4 @@
+// backend/routes/staff/product.routes.js
 const express = require("express");
 const multer = require("multer");
 const path = require("path");
@@ -11,6 +12,7 @@ const {
   getProductDetailsByIdHandler,
   getProductsByCategoryHandler,
   getProductOverviewPaginatedHandler,
+  createVariantHandler,
 } = require("../../controllers/staff/product.controller");
 
 // Configureing multer for excel upload
@@ -59,6 +61,11 @@ router.get("/brands/:id", getBrandsProductListHandler);
 // Fuzzy Search GET /api/products/list?product_id=uuid
 // Allowed for all roles
 router.get("/list", getProductListBySearchHandler);
+
+// For creating a new variant of an existing product
+// Allowed only for ADMIN & STAFF
+// POST /api/products/:productId/variants
+router.post("/:productId/variants", createVariantHandler);
 
 // Allowed for all roles
 // GET /api/products/overview?page=1&limit=20

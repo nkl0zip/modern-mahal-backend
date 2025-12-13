@@ -1,12 +1,14 @@
+// backend/controllers/staff/product.controller.js
 const path = require("path");
 const fs = require("fs");
 const { parseExcel } = require("../../utils/excelParser");
 const {
   findIdByName,
-  createProduct,
+  findOrCreateProductByCode,
+  findOrCreateColour,
+  createVariant,
   insertProductCategory,
-  insertProductColor,
-  insertOneToMany,
+  insertProductHighlights,
   getAllProductDetails,
   searchProducts,
   getBrandsProductList,
@@ -14,136 +16,187 @@ const {
   getProductDetailsById,
   getProductsByCategory,
   getProductOverviewPaginated,
+  findOrCreateFinish,
 } = require("../../models/staff/product.model");
 
+/* ---------------------------------------------------
+   Utility: Normalize Excel Row Headers
+   --------------------------------------------------- */
+function normalizeRowKeys(row) {
+  const normalized = {};
+
+  for (const key in row) {
+    if (!key) continue;
+
+    // trim spaces + lowercase
+    const cleanKey = key.trim().toLowerCase();
+    normalized[cleanKey] = row[key];
+  }
+
+  return normalized;
+}
+
+/* ---------------------------------------------------
+   Utility: Parse comma / space separated Excel values
+   --------------------------------------------------- */
+function parseArr(value) {
+  if (!value) return [];
+
+  let result = [];
+
+  // Excel libraries sometimes return arrays
+  if (Array.isArray(value)) {
+    result = value.map((v) => String(v).trim());
+  }
+  // Normal string input
+  else if (typeof value === "string") {
+    result = value
+      // split on comma, pipe, or 2+ spaces
+      .split(/,|\||\s{2,}/)
+      .map((v) => v.trim());
+  }
+
+  // remove empty values + duplicates
+  return [...new Set(result.filter(Boolean))];
+}
+
+/**
+ * Bulk upload handler (Excel)
+ * The sheet's headers:
+ * Brand, Product, Category, Segment, Product Name, Product Code, Sub Code,
+ * Colours, Finish, Description, Highlights, MRP, Alloy, Weight Capacity,
+ * Usability, In Box Content, Warranty, Tags
+ */
 const uploadProductsFromExcel = async (req, res, next) => {
   try {
     const filePath = req.file.path;
-    const rows = parseExcel(filePath);
 
+    // Parse Excel file
+    const rawRows = parseExcel(filePath);
+
+    // Normalize column headers ONCE
+    const rows = rawRows.map(normalizeRowKeys);
+
+    /* ---------- Validate Brands ---------- */
     for (const row of rows) {
-      // 1. Lookup for brand (skip row if brand missing)
-      const brand_id = row["Brand"]
-        ? await findIdByName("brands", row["Brand"])
-        : null;
-      if (!brand_id) continue;
+      const brandName = row["brand"];
+      const brandId = await findIdByName("brands", brandName);
 
-      // 2. Create product
-      const product = {
-        name: row["Product Name"],
+      if (!brandId) {
+        return res.status(401).json({
+          message: `There is no brand named "${brandName}". Create this brand in the database.`,
+        });
+      }
+    }
+
+    /* ---------- Validate Categories ---------- */
+    for (const row of rows) {
+      const categoryName = row["product category"];
+      const catId = await findIdByName("categories", categoryName);
+
+      if (!catId) {
+        return res.status(401).json({
+          message: `There is no category named "${categoryName}". Create this category in the database.`,
+        });
+      }
+    }
+
+    /* ---------- Process Rows ---------- */
+    for (const row of rows) {
+      if (!row["brand"] || !row["product code"]) continue;
+
+      // Brand lookup
+      const brand_id = await findIdByName("brands", row["brand"]);
+
+      // Product master
+      const productMaster = {
+        name: row["product name"] || row["product"] || null,
         brand_id,
-        product_code: row["Product Code"],
-        description: row["Description"],
-        stock_quantity: parseInt(row["Stock Quantity"]) || 0,
-        quantity_per_unit: parseInt(row["Quantity Per Unit"]) || null,
-        price_per_unit: parseFloat(row["Price per unit"]) || null,
-        quantity_bundle_max: parseInt(row["Quantity Bundle Max"]) || null,
-        price_bundle_max: parseFloat(row["Price Bundle Max"]) || null,
-        quantity_bundle_ultra: parseInt(row["Quantity Bundle Ultra"]) || null,
-        price_bundle_ultra: parseFloat(row["Price Bundle Ultra"]) || null,
-        weight_capacity: parseFloat(row["Weight Capacity"]) || null,
-        product_dimension: row["Product Dimension"],
-        warranty: row["Warranty"],
+        product_code: row["product code"],
+        description: row["description"] || null,
+        segment: row["segment"] || null,
+        warranty: row["warranty"] || null,
       };
 
-      const createdProduct = await createProduct(product);
+      const createdProduct = await findOrCreateProductByCode(productMaster);
 
-      // 3. Product-Category (join)
-      const parseArr = (val) =>
-        val
-          ? val
-              .split(",")
-              .map((s) => s.trim())
-              .filter(Boolean)
-          : [];
-      const categoryNames = parseArr(row["Product Category"]);
+      /* ---------- Categories ---------- */
+      const categoryNames = parseArr(row["product category"]);
       const categoryIds = [];
+
       for (const cat of categoryNames) {
         const catId = await findIdByName("categories", cat);
         if (catId) categoryIds.push(catId);
       }
+
       await insertProductCategory(createdProduct.id, categoryIds);
 
-      // 4. Product-Color (join)
-      const colorNames = parseArr(row["Colour"]);
-      const colorIds = [];
-      for (const color of colorNames) {
-        const colorId = await findIdByName("colors", color);
-        if (colorId) colorIds.push(colorId);
+      /* ---------- Highlights (robust) ---------- */
+      const highlightsArr = parseArr(row["highlights"]);
+      if (highlightsArr.length) {
+        await insertProductHighlights(createdProduct.id, highlightsArr);
       }
-      await insertProductColor(createdProduct.id, colorIds);
 
-      // 5. Highlights (one-to-many)
-      const highlightsArr = parseArr(row["Highlights"]);
-      await insertOneToMany(
-        "highlights",
-        createdProduct.id,
-        highlightsArr,
-        "text"
-      );
+      /* ---------- Variant ---------- */
+      const variantData = {
+        sub_code: row["sub code"] || null,
+        colour: row["colours"] || null,
+        colour_code: null,
+        finish: row["finish"] || null,
+        finish_code: null,
+        mrp: row["mrp"] ? parseFloat(row["mrp"]) : null,
+        alloy: parseArr(row["alloy"]) || null,
+        weight_capacity: row["weight capacity"] || null,
+        usability: parseArr(row["usability"]) || null,
+        in_box_content: parseArr(row["in box content"]) || null,
+        tags: Array.isArray(row["tags"])
+          ? row["tags"].join(",")
+          : row["tags"] || null,
+      };
 
-      // 6. Alloys (one-to-many)
-      const alloysArr = parseArr(row["Alloy"]);
-      await insertOneToMany("alloys", createdProduct.id, alloysArr, "name");
-
-      // 7. Usability (one-to-many)
-      const usabilityArr = parseArr(row["Usability"]);
-      await insertOneToMany(
-        "usability",
-        createdProduct.id,
-        usabilityArr,
-        "name"
-      );
-
-      // 8. In Box Content (one-to-many)
-      const inBoxArr = parseArr(row["In Box Content"]);
-      await insertOneToMany(
-        "in_box_content",
-        createdProduct.id,
-        inBoxArr,
-        "name"
-      );
-
-      // 9. Tags (one-to-many)
-      const tagsArr = parseArr(row["Tags"]);
-      await insertOneToMany("tags", createdProduct.id, tagsArr, "name");
+      await createVariant(createdProduct.id, variantData);
     }
 
-    fs.unlinkSync(filePath);
+    /* ---------- Cleanup ---------- */
+    try {
+      fs.unlinkSync(filePath);
+    } catch (e) {
+      console.warn("Failed to remove uploaded Excel file:", e.message);
+    }
+
     res.json({ message: "Products uploaded and imported successfully." });
   } catch (err) {
     next(err);
   }
 };
 
-// For uploading a single product details
+// Create single product + variant endpoint (keeps contract with earlier createSingleProductHandler)
 const createSingleProductHandler = async (req, res, next) => {
   try {
+    // Expecting product-level + variant-level fields in body
     const {
       name,
       brand,
       product_code,
       product_category,
       description,
+      segment,
+      warranty,
+
+      // variant-level
+      sub_code,
       colour,
-      highlights,
-      stock_quantity,
-      quantity_per_unit,
-      price_per_unit,
-      quantity_bundle_max,
-      price_bundle_max,
-      quantity_bundle_ultra,
-      price_bundle_ultra,
+      finish,
+      mrp,
       alloy,
       weight_capacity,
-      product_dimension,
       usability,
       in_box_content,
-      warranty,
       tags,
+      highlights,
     } = req.body;
 
-    // 1. Brand Lookup
+    // Brand lookup
     const brand_id = brand ? await findIdByName("brands", brand) : null;
     if (!brand_id) {
       return res
@@ -151,36 +204,18 @@ const createSingleProductHandler = async (req, res, next) => {
         .json({ message: "Brand not found. Please provide a valid brand." });
     }
 
-    // 2. Product Creation
-    const product = {
+    // Create or find product master
+    const productMaster = {
       name,
       brand_id,
       product_code,
-      description,
-      stock_quantity: parseInt(stock_quantity) || 0,
-      quantity_per_unit: parseInt(quantity_per_unit) || null,
-      price_per_unit: parseFloat(price_per_unit) || null,
-      quantity_bundle_max: parseInt(quantity_bundle_max) || null,
-      price_bundle_max: parseFloat(price_bundle_max) || null,
-      quantity_bundle_ultra: parseInt(quantity_bundle_ultra) || null,
-      price_bundle_ultra: parseFloat(price_bundle_ultra) || null,
-      weight_capacity: parseFloat(weight_capacity) || null,
-      product_dimension,
-      warranty,
+      description: description || null,
+      segment: segment || null,
+      warranty: warranty || null,
     };
+    const createdProduct = await findOrCreateProductByCode(productMaster);
 
-    const createdProduct = await createProduct(product);
-
-    // 3. Product-Category (join)
-    const parseArr = (val) =>
-      Array.isArray(val)
-        ? val
-        : val
-        ? val
-            .split(",")
-            .map((s) => s.trim())
-            .filter(Boolean)
-        : [];
+    // Product categories
     const categoryNames = parseArr(product_category);
     const categoryIds = [];
     for (const cat of categoryNames) {
@@ -189,57 +224,36 @@ const createSingleProductHandler = async (req, res, next) => {
     }
     await insertProductCategory(createdProduct.id, categoryIds);
 
-    // 4. Product-Color (join)
-    const colorNames = parseArr(colour);
-    const colorIds = [];
-    for (const color of colorNames) {
-      const colorId = await findIdByName("colors", color);
-      if (colorId) colorIds.push(colorId);
-    }
-    await insertProductColor(createdProduct.id, colorIds);
+    // Product highlights (product-level)
+    await insertProductHighlights(createdProduct.id, parseArr(highlights));
 
-    // 5. Highlights (one-to-many)
-    await insertOneToMany(
-      "highlights",
-      createdProduct.id,
-      parseArr(highlights),
-      "text"
-    );
+    // Create variant
+    const variantData = {
+      sub_code,
+      colour,
+      finish,
+      mrp: mrp ? parseFloat(mrp) : null,
+      alloy,
+      weight_capacity,
+      usability: Array.isArray(usability)
+        ? usability.join(",")
+        : usability || null,
+      in_box_content: Array.isArray(in_box_content)
+        ? in_box_content.join(",")
+        : in_box_content || null,
+      tags: Array.isArray(tags) ? tags.join(",") : tags || null,
+    };
 
-    // 6. Alloys (one-to-many)
-    await insertOneToMany("alloys", createdProduct.id, parseArr(alloy), "name");
+    const createdVariant = await createVariant(createdProduct.id, variantData);
 
-    // 7. Usability (one-to-many)
-    await insertOneToMany(
-      "usability",
-      createdProduct.id,
-      parseArr(usability),
-      "name"
-    );
-
-    // 8. In Box Content (one-to-many)
-    await insertOneToMany(
-      "in_box_content",
-      createdProduct.id,
-      parseArr(in_box_content),
-      "name"
-    );
-
-    // 9. Tags (one-to-many)
-    await insertOneToMany("tags", createdProduct.id, parseArr(tags), "name");
-
-    res.status(201).json({
-      message: "Product created successfully.",
+    // Reply with both product and variant info (like before, but now includes variant)
+    return res.status(201).json({
+      message: "Product and variant created successfully.",
       product: {
         ...createdProduct,
-        brand,
-        product_category,
-        colour,
-        highlights,
-        alloy,
-        usability,
-        in_box_content,
-        tags,
+      },
+      variant: {
+        ...createdVariant,
       },
     });
   } catch (err) {
@@ -247,48 +261,134 @@ const createSingleProductHandler = async (req, res, next) => {
   }
 };
 
-// GET /api/products
-/**
- * This is to get All Product Details of all Products: Should not be used for Product Overview
- * Refer to Pagination APIs for Product Listing with Overviews
- */
+// Helper Function
+function normalizeNameInput(value) {
+  if (!value) return null;
 
-const getAllProductsHandler = async (req, res, next) => {
+  // If array → take first valid item
+  if (Array.isArray(value)) {
+    return normalizeNameInput(value[0]);
+  }
+
+  // If object → look for .name
+  if (typeof value === "object") {
+    if (value.name) return String(value.name).trim();
+    return null;
+  }
+
+  // If number → convert to string
+  if (typeof value === "number") {
+    return String(value).trim();
+  }
+
+  // If string → trim
+  if (typeof value === "string") {
+    const n = value.trim();
+    return n.length > 0 ? n : null;
+  }
+
+  return null;
+}
+
+// For creating a new variant for an existing product
+const createVariantHandler = async (req, res, next) => {
   try {
-    const products = await getAllProductDetails();
-    res.status(200).json({
-      message: "Products fetched successfully.",
-      products,
+    const { productId } = req.params;
+    const {
+      sub_code,
+      colour, // string e.g. "Black" or { name, code }
+      finish, // string or { name, code }
+      mrp,
+      alloy,
+      weight_capacity,
+      usability,
+      in_box_content,
+      tags,
+    } = req.body;
+
+    // 1) Ensure product exists
+    const product = await getProductDetailsById(productId);
+    if (!product) {
+      return res.status(404).json({ message: "Product not found" });
+    }
+
+    // 2) Colour: support either "Black" or { name: "Black", code: "BLK" }
+    let colour_id = null;
+    if (colour) {
+      const colourName = normalizeNameInput(colour);
+
+      if (colourName) {
+        colour_id = await findOrCreateColour(colourName);
+      }
+    }
+
+    // 3) Finish
+    let finish_id = null;
+    if (finish) {
+      const finishName = normalizeNameInput(finish);
+
+      if (finishName) {
+        finish_id = await findOrCreateFinish(finishName);
+      }
+    }
+
+    // 4) Build variant object to insert
+    const variantObj = {
+      sub_code: sub_code || null,
+      colour_id: colour_id,
+      finish_id: finish_id,
+      mrp: mrp ? parseFloat(mrp) : null,
+      alloy: alloy || null,
+      weight_capacity: weight_capacity || null,
+      usability: usability || null,
+      in_box_content: in_box_content || null,
+      tags: tags || null,
+    };
+
+    // 5) Create variant
+    const newVariant = await createVariant(productId, variantObj);
+
+    return res.status(201).json({
+      message: "Variant created successfully",
+      variant: newVariant,
     });
   } catch (err) {
     next(err);
   }
 };
 
-// GET /api/products/search?name=... OR ?code=...
+// The rest of the controller handlers call model functions which now return variants as part of product responses.
+// Minimal changes required here — simply forwarding model results to client.
+
+const getAllProductsHandler = async (req, res, next) => {
+  try {
+    const products = await getAllProductDetails();
+    res
+      .status(200)
+      .json({ message: "Products fetched successfully.", products });
+  } catch (err) {
+    next(err);
+  }
+};
+
 const searchProductsHandler = async (req, res, next) => {
   try {
     const { name, code } = req.query;
-
     if (!name && !code) {
       return res.status(400).json({
         message: "Please provide a product name or product code to search.",
       });
     }
-
     const products = await searchProducts({ name, code });
-
     if (!products || products.length === 0) {
       return res.status(404).json({
         message: "No product exists with such name/code. Try something else.",
         products: [],
       });
     }
-
-    res.status(200).json({
-      message: "Products fetched successfully.",
-      products,
-    });
+    res
+      .status(200)
+      .json({ message: "Products fetched successfully.", products });
   } catch (err) {
     next(err);
   }
@@ -298,11 +398,7 @@ const getBrandsProductListHandler = async (req, res, next) => {
   try {
     const { id } = req.params;
     const { page = 1 } = req.query;
-
-    if (!id) {
-      return res.status(400).json({ message: "Brand ID is required" });
-    }
-
+    if (!id) return res.status(400).json({ message: "Brand ID is required" });
     const pageNum = parseInt(page, 10) || 1;
 
     const { products, total_count, brand_name } = await getBrandsProductList({
@@ -336,24 +432,18 @@ const getBrandsProductListHandler = async (req, res, next) => {
   }
 };
 
-// To Fetch product list by name (fuzzy) or product_id (exact)
 const getProductListBySearchHandler = async (req, res, next) => {
   try {
     const { name, page = 1 } = req.query;
-
-    if (!name) {
-      return res.status(400).json({
-        message: "Search term 'name' is required.",
-      });
-    }
-
+    if (!name)
+      return res
+        .status(400)
+        .json({ message: "Search term 'name' is required." });
     const pageNum = parseInt(page, 10) || 1;
-
     const { products, total_count } = await getProductListBySearch({
       name,
       page: pageNum,
     });
-
     return res.status(200).json({
       message: "Products fetched successfully.",
       page: pageNum,
@@ -374,11 +464,9 @@ const getProductOverviewPaginatedHandler = async (req, res, next) => {
   try {
     const { page = 1 } = req.query;
     const pageNum = parseInt(page, 10) || 1;
-
     const { products, total_count } = await getProductOverviewPaginated({
       page: pageNum,
     });
-
     return res.status(200).json({
       message: "Product overview fetched.",
       page: pageNum,
@@ -398,24 +486,12 @@ const getProductOverviewPaginatedHandler = async (req, res, next) => {
 const getProductDetailsByIdHandler = async (req, res, next) => {
   try {
     const { id } = req.params;
-
-    if (!id)
-      return res.status(401).json({
-        message: "Product_Id is required",
-      });
-
+    if (!id) return res.status(401).json({ message: "Product_Id is required" });
     const product = await getProductDetailsById(id);
-
-    if (!product) {
-      return res.status(404).json({
-        message: "Product not found",
-      });
-    }
-
-    return res.status(200).json({
-      message: "Product fetched successfully",
-      data: product,
-    });
+    if (!product) return res.status(404).json({ message: "Product not found" });
+    return res
+      .status(200)
+      .json({ message: "Product fetched successfully", data: product });
   } catch (err) {
     console.error("Error fetching the product list: ", err);
     next(err);
@@ -425,29 +501,23 @@ const getProductDetailsByIdHandler = async (req, res, next) => {
 const getProductsByCategoryHandler = async (req, res, next) => {
   try {
     const { id, name, page = 1 } = req.query;
-
-    if (!id && !name) {
+    if (!id && !name)
       return res.status(400).json({
         message: "Please provide either 'id' or 'name' for category.",
       });
-    }
-
     const pageNum = parseInt(page, 10) || 1;
-
     const { products, total_count } = await getProductsByCategory({
       category_id: id,
       category_name: name,
       page: pageNum,
       limit: 20,
     });
-
     if (!products || products.length === 0) {
       return res.status(404).json({
         message: "No products found for this category.",
         products: [],
       });
     }
-
     return res.status(200).json({
       message: "Category products fetched successfully.",
       page: pageNum,
@@ -474,4 +544,5 @@ module.exports = {
   getProductDetailsByIdHandler,
   getProductsByCategoryHandler,
   getProductOverviewPaginatedHandler,
+  createVariantHandler,
 };

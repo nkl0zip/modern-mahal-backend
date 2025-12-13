@@ -1,42 +1,127 @@
+// backend/models/staff/product.model.js
 const pool = require("../../config/db");
 
-// Helper function: case-insensitive lookup for mapping
+// Helper: case-insensitive lookup for a record's id by name
 const findIdByName = async (table, name, col = "name") => {
+  if (!name) return null;
   const query = `SELECT id FROM ${table} WHERE LOWER(${col}) = LOWER($1) LIMIT 1;`;
   const result = await pool.query(query, [name.trim()]);
   return result.rows[0]?.id || null;
 };
 
-const createProduct = async (product) => {
+// Helper: find or create a colour and return id
+const findOrCreateColour = async (name, code = null) => {
+  if (!name || typeof name !== "string") return null;
+
+  name = name.trim();
+  if (!name) return null;
+
+  const selectQ = `SELECT id FROM colours WHERE LOWER(name) = LOWER($1) LIMIT 1;`;
+  const sel = await pool.query(selectQ, [name]);
+  if (sel.rows.length > 0) return sel.rows[0].id;
+
+  const insertQ = `INSERT INTO colours (name, code) VALUES ($1, $2) RETURNING id;`;
+  const ins = await pool.query(insertQ, [name, code]);
+  return ins.rows[0].id;
+};
+
+// Helper: find or create a finish and return id
+const findOrCreateFinish = async (name, code = null) => {
+  if (!name || typeof name !== "string") return null;
+
+  name = name.trim();
+  if (!name) return null;
+
+  const selectQ = `SELECT id FROM finishes WHERE LOWER(name) = LOWER($1) LIMIT 1;`;
+  const sel = await pool.query(selectQ, [name]);
+  if (sel.rows.length > 0) return sel.rows[0].id;
+
+  const insertQ = `INSERT INTO finishes (name, code) VALUES ($1, $2) RETURNING id;`;
+  const ins = await pool.query(insertQ, [name, code]);
+  return ins.rows[0].id;
+};
+
+/**
+ * Create or return product master by product_code.
+ * If a product with same product_code exists, return it.
+ * product object may contain:
+ *   name, brand_id, product_code, description, segment, warranty
+ */
+const findOrCreateProductByCode = async (product) => {
+  // try find existing by product_code
+  const existing = await pool.query(
+    `SELECT * FROM products WHERE product_code = $1 LIMIT 1;`,
+    [product.product_code]
+  );
+  if (existing.rows[0]) return existing.rows[0];
+
   const query = `
-    INSERT INTO products 
-    (name, brand_id, product_code, description, stock_quantity, quantity_per_unit, price_per_unit, quantity_bundle_max, price_bundle_max, quantity_bundle_ultra, price_bundle_ultra, weight_capacity, product_dimension, warranty)
-    VALUES 
-    ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
+    INSERT INTO products
+      (name, brand_id, product_code, description, segment, warranty)
+    VALUES ($1,$2,$3,$4,$5,$6)
     RETURNING *;
   `;
-
   const values = [
     product.name,
     product.brand_id,
     product.product_code,
     product.description,
-    product.stock_quantity,
-    product.quantity_per_unit,
-    product.price_per_unit,
-    product.quantity_bundle_max,
-    product.price_bundle_max,
-    product.quantity_bundle_ultra,
-    product.price_bundle_ultra,
-    product.weight_capacity,
-    product.product_dimension,
-    product.warranty,
+    product.segment || null,
+    product.warranty || null,
   ];
   const result = await pool.query(query, values);
   return result.rows[0];
 };
 
-// Insert join table for product-category
+/**
+ * Create a variant row for a given product_id.
+ * variantData should include:
+ *  sub_code, colour (name), colour_code (optional), finish (name), finish_code,
+ *  mrp, alloy, weight_capacity, usability, in_box_content, tags
+ */
+const createVariant = async (productId, variantData) => {
+  // find/create colour & finish
+  let colourId = null;
+  if (!variantData.colour_id) {
+    colourId = variantData.colour
+      ? await findOrCreateColour(variantData.colour, variantData.colour_code)
+      : null;
+  } else {
+    colourId = variantData.colour_id;
+  }
+
+  let finishId = null;
+  if (!variantData.finish_id) {
+    finishId = variantData.finish
+      ? await findOrCreateFinish(variantData.finish, variantData.finish_code)
+      : null;
+  } else {
+    finishId = variantData.finish_id;
+  }
+
+  const query = `
+    INSERT INTO product_variants
+      (product_id, sub_code, colour_id, finish_id, mrp, alloy, weight_capacity, usability, in_box_content, tags)
+    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+    RETURNING *;
+  `;
+  const values = [
+    productId,
+    variantData.sub_code || null,
+    colourId,
+    finishId,
+    variantData.mrp || null,
+    variantData.alloy || null,
+    variantData.weight_capacity || null,
+    variantData.usability || null,
+    variantData.in_box_content || null,
+    variantData.tags || null,
+  ];
+  const result = await pool.query(query, values);
+  return result.rows[0];
+};
+
+// Insert join table for product-category (unchanged)
 async function insertProductCategory(product_id, category_ids) {
   if (!category_ids || category_ids.length === 0) return;
   const query = `
@@ -47,169 +132,140 @@ async function insertProductCategory(product_id, category_ids) {
   await pool.query(query, [product_id, ...category_ids]);
 }
 
-// Insert join table for product-color
-async function insertProductColor(product_id, color_ids) {
-  if (!color_ids || color_ids.length === 0) return;
+// Generic insert for product-level highlights
+async function insertProductHighlights(product_id, highlightsArr) {
+  if (!highlightsArr || highlightsArr.length === 0) return;
   const query = `
-    INSERT INTO product_color (product_id, color_id)
-    VALUES ${color_ids.map((_, i) => `($1, $${i + 2})`).join(", ")}
-    ON CONFLICT DO NOTHING;
+    INSERT INTO highlights (product_id, text)
+    VALUES ${highlightsArr.map((_, i) => `($1, $${i + 2})`).join(", ")};
   `;
-  await pool.query(query, [product_id, ...color_ids]);
+  await pool.query(query, [product_id, ...highlightsArr]);
 }
 
-// One-to-many: highlights, alloys, usability, in_box_content, tags
-async function insertOneToMany(table, product_id, valuesArr, col) {
-  if (!valuesArr || valuesArr.length === 0) return;
-  const query = `
-    INSERT INTO ${table} (product_id, ${col})
-    VALUES ${valuesArr.map((_, i) => `($1, $${i + 2})`).join(", ")};
-  `;
-  await pool.query(query, [product_id, ...valuesArr]);
-}
-
-// Fetch all product details with joins for all attributes
+/**
+ * Fetch all products with their variants.
+ * Returns product-level fields plus an array 'variants' with variant objects.
+ */
 async function getAllProductDetails() {
   const query = `
-    SELECT 
+    SELECT
       p.id,
-      p.name AS "product_name",
-      b.name AS "brand",
-      p.product_code AS "product_code",
-      p.description AS "description",
-      p.stock_quantity AS "stock_quantity",
-      p.quantity_per_unit AS "quantity_per_unit",
-      p.price_per_unit AS "price_per_unit",
-      p.quantity_bundle_max AS "quantity_bundle_max",
-      p.price_bundle_max AS "price_bundle_max",
-      p.quantity_bundle_ultra AS "quantity_bundle_ultra",
-      p.price_bundle_ultra AS "price_bundle_ultra",
-      p.weight_capacity AS "weight_capacity",
-      p.product_dimension AS "product_dimension",
-      p.warranty AS "warranty",
-
-      -- Arrays for categories and colors
+      p.name AS product_name,
+      b.name AS brand,
+      p.product_code,
+      p.description,
+      p.segment,
+      p.warranty,
       ARRAY(
         SELECT c.name
         FROM product_category pc
         JOIN categories c ON pc.category_id = c.id
         WHERE pc.product_id = p.id
-      ) AS "product_category",
-
+      ) AS product_category,
       ARRAY(
-        SELECT cl.name
-        FROM product_color pcl
-        JOIN colors cl ON pcl.color_id = cl.id
-        WHERE pcl.product_id = p.id
-      ) AS "colour",
-
-      -- Arrays for one-to-many attributes
-      ARRAY(
-        SELECT h.text
-        FROM highlights h
-        WHERE h.product_id = p.id
-      ) AS "highlights",
-
-      ARRAY(
-        SELECT a.name
-        FROM alloys a
-        WHERE a.product_id = p.id
-      ) AS "alloy",
-
-      ARRAY(
-        SELECT u.name
-        FROM usability u
-        WHERE u.product_id = p.id
-      ) AS "usability",
-
-      ARRAY(
-        SELECT ibc.name
-        FROM in_box_content ibc
-        WHERE ibc.product_id = p.id
-      ) AS "in_box_content",
-
-      ARRAY(
-        SELECT t.name
-        FROM tags t
-        WHERE t.product_id = p.id
-      ) AS "tags"
-
-    FROM products p
-    LEFT JOIN brands b ON p.brand_id = b.id
-    ORDER BY p.created_at DESC
-  `;
-  const result = await pool.query(query);
-  return result.rows;
-}
-
-// Fetch product details by product ID with joins for all attributes
-async function getProductDetailsById(productId) {
-  const query = `
-    SELECT 
-      p.id,
-      p.name AS "product_name",
-      b.name AS "brand",
-      p.product_code AS "product_code",
-      p.description AS "description",
-      p.stock_quantity AS "stock_quantity",
-      p.quantity_per_unit AS "quantity_per_unit",
-      p.price_per_unit AS "price_per_unit",
-      p.quantity_bundle_max AS "quantity_bundle_max",
-      p.price_bundle_max AS "price_bundle_max",
-      p.quantity_bundle_ultra AS "quantity_bundle_ultra",
-      p.price_bundle_ultra AS "price_bundle_ultra",
-      p.weight_capacity AS "weight_capacity",
-      p.product_dimension AS "product_dimension",
-      p.warranty AS "warranty",
-
-      -- Array of product images/videos as JSON objects
+        SELECT jsonb_build_object(
+          'id', v.id,
+          'sub_code', v.sub_code,
+          'colour', (SELECT name FROM colours WHERE id = v.colour_id),
+          'finish', (SELECT name FROM finishes WHERE id = v.finish_id),
+          'mrp', v.mrp,
+          'alloy', v.alloy,
+          'weight_capacity', v.weight_capacity,
+          'usability', v.usability,
+          'in_box_content', v.in_box_content,
+          'tags', v.tags
+        )
+        FROM product_variants v
+        WHERE v.product_id = p.id
+        ORDER BY v.created_at ASC
+      ) AS variants,
       ARRAY(
         SELECT jsonb_build_object(
           'id', pi.id,
           'media_url', pi.media_url,
           'media_type', pi.media_type,
-          'display_order', pi.display_order
+          'display_order', pi.display_order,
+          'variant_id', pi.variant_id
         )
         FROM products_image pi
         WHERE pi.product_id = p.id
         ORDER BY pi.display_order ASC
-      ) AS "images",
+      ) AS images,
+      ARRAY(
+        SELECT h.text FROM highlights h WHERE h.product_id = p.id
+      ) AS highlights
+    FROM products p
+    LEFT JOIN brands b ON p.brand_id = b.id
+    ORDER BY p.created_at DESC;
+  `;
+  const result = await pool.query(query);
+  return result.rows;
+}
 
-      -- Arrays for categories and colors
+/**
+ * Fetch a product by id, with variants and images
+ */
+async function getProductDetailsById(productId) {
+  const query = `
+    SELECT
+      p.id,
+      p.name AS product_name,
+      b.name AS brand,
+      p.product_code,
+      p.description,
+      p.segment,
+      p.warranty,
       ARRAY(
         SELECT c.name
         FROM product_category pc
         JOIN categories c ON pc.category_id = c.id
         WHERE pc.product_id = p.id
-      ) AS "product_category",
-
+      ) AS product_category,
       ARRAY(
-        SELECT cl.name
-        FROM product_color pcl
-        JOIN colors cl ON pcl.color_id = cl.id
-        WHERE pcl.product_id = p.id
-      ) AS "colour",
-
-      -- One-to-many attributes
-      ARRAY(SELECT h.text FROM highlights h WHERE h.product_id = p.id) AS "highlights",
-      ARRAY(SELECT a.name FROM alloys a WHERE a.product_id = p.id) AS "alloy",
-      ARRAY(SELECT u.name FROM usability u WHERE u.product_id = p.id) AS "usability",
-      ARRAY(SELECT ibc.name FROM in_box_content ibc WHERE ibc.product_id = p.id) AS "in_box_content",
-      ARRAY(SELECT t.name FROM tags t WHERE t.product_id = p.id) AS "tags"
-
+        SELECT jsonb_build_object(
+          'id', v.id,
+          'sub_code', v.sub_code,
+          'colour', (SELECT name FROM colours WHERE id = v.colour_id),
+          'finish', (SELECT name FROM finishes WHERE id = v.finish_id),
+          'mrp', v.mrp,
+          'alloy', v.alloy,
+          'weight_capacity', v.weight_capacity,
+          'usability', v.usability,
+          'in_box_content', v.in_box_content,
+          'tags', v.tags
+        )
+        FROM product_variants v
+        WHERE v.product_id = p.id
+        ORDER BY v.created_at ASC
+      ) AS variants,
+      ARRAY(
+        SELECT jsonb_build_object(
+          'id', pi.id,
+          'media_url', pi.media_url,
+          'media_type', pi.media_type,
+          'display_order', pi.display_order,
+          'variant_id', pi.variant_id
+        )
+        FROM products_image pi
+        WHERE pi.product_id = p.id
+        ORDER BY pi.display_order ASC
+      ) AS images,
+      ARRAY(
+        SELECT h.text FROM highlights h WHERE h.product_id = p.id
+      ) AS highlights
     FROM products p
     LEFT JOIN brands b ON p.brand_id = b.id
     WHERE p.id = $1
     LIMIT 1;
   `;
-
   const result = await pool.query(query, [productId]);
-
-  // Return null if product not found
   return result.rows.length ? result.rows[0] : null;
 }
 
-// Fetch products by name (partial match) or code (exact match)
+/**
+ * Search products by product name (like) or by product_code (exact).
+ * Returns product-level info with a small 'variants' preview (first variant).
+ */
 async function searchProducts({ name, code }) {
   let whereClause = "";
   let values = [];
@@ -223,117 +279,60 @@ async function searchProducts({ name, code }) {
   }
 
   const query = `
-    SELECT 
+    SELECT
       p.id,
-      p.name AS "product_name",
-      b.name AS "brand",
-      p.product_code AS "product_code",
-      p.description AS "description",
-      p.stock_quantity AS "stock_quantity",
-      p.quantity_per_unit AS "quantity_per_unit",
-      p.price_per_unit AS "price_per_unit",
-      p.quantity_bundle_max AS "quantity_bundle_max",
-      p.price_bundle_max AS "price_bundle_max",
-      p.quantity_bundle_ultra AS "quantity_bundle_ultra",
-      p.price_bundle_ultra AS "price_bundle_ultra",
-      p.weight_capacity AS "weight_capacity",
-      p.product_dimension AS "product_dimension",
-      p.warranty AS "warranty",
-
-      ARRAY(
-        SELECT c.name
-        FROM product_category pc
-        JOIN categories c ON pc.category_id = c.id
-        WHERE pc.product_id = p.id
-      ) AS "product_category",
-
-      ARRAY(
-        SELECT cl.name
-        FROM product_color pcl
-        JOIN colors cl ON pcl.color_id = cl.id
-        WHERE pcl.product_id = p.id
-      ) AS "colour",
-
-      ARRAY(
-        SELECT h.text
-        FROM highlights h
-        WHERE h.product_id = p.id
-      ) AS "highlights",
-
-      ARRAY(
-        SELECT a.name
-        FROM alloys a
-        WHERE a.product_id = p.id
-      ) AS "alloy",
-
-      ARRAY(
-        SELECT u.name
-        FROM usability u
-        WHERE u.product_id = p.id
-      ) AS "usability",
-
-      ARRAY(
-        SELECT ibc.name
-        FROM in_box_content ibc
-        WHERE ibc.product_id = p.id
-      ) AS "in_box_content",
-
-      ARRAY(
-        SELECT t.name
-        FROM tags t
-        WHERE t.product_id = p.id
-      ) AS "tags"
-
+      p.name AS product_name,
+      b.name AS brand,
+      p.product_code,
+      p.description,
+      (
+        SELECT jsonb_build_object(
+          'id', v.id,
+          'sub_code', v.sub_code,
+          'mrp', v.mrp,
+          'colour', (SELECT name FROM colours WHERE id = v.colour_id),
+          'finish', (SELECT name FROM finishes WHERE id = v.finish_id)
+        ) FROM product_variants v WHERE v.product_id = p.id ORDER BY v.created_at ASC LIMIT 1
+      ) AS primary_variant
     FROM products p
     LEFT JOIN brands b ON p.brand_id = b.id
     ${whereClause}
-    ORDER BY p.created_at DESC
+    ORDER BY p.created_at DESC;
   `;
   const result = await pool.query(query, values);
   return result.rows;
 }
 
 /**
- * Paginated product listing by Brand (ID)
- * Returns product overview data with:
- * - product_id
- * - product_name
- * - brand_name
- * - main image
- * - price_per_unit
- * - product_code
- * - total_count for pagination
+ * Brand product list (overview) - returns product + primary variant mrp and image
  */
 const getBrandsProductList = async ({ brand_id, page = 1, limit = 20 }) => {
   if (!brand_id) return { products: [], total_count: 0, brand_name: null };
-
   const offset = (page - 1) * limit;
 
   const query = `
     WITH BrandInfo AS (
       SELECT name AS brand_name FROM brands WHERE id = $1 LIMIT 1
     ),
-
     FilteredProducts AS (
       SELECT
         p.id,
         p.name,
         p.product_code,
-        p.price_per_unit,
         (
-          SELECT pi.media_url
-          FROM products_image pi
-          WHERE pi.product_id = p.id AND pi.display_order = 1
-          LIMIT 1
+          SELECT v.mrp FROM product_variants v WHERE v.product_id = p.id ORDER BY v.created_at ASC LIMIT 1
+        ) AS price_per_unit,
+        (
+          SELECT pi.media_url FROM products_image pi WHERE pi.product_id = p.id AND (pi.variant_id IS NULL OR pi.variant_id IN (
+             SELECT id FROM product_variants pv WHERE pv.product_id = p.id LIMIT 1
+          )) AND pi.display_order = 1 LIMIT 1
         ) AS product_image
       FROM products p
       WHERE p.brand_id = $1
     ),
-
     CountResult AS (
       SELECT COUNT(*) AS total_count FROM FilteredProducts
     )
-
     SELECT
       fp.id AS product_id,
       fp.name AS product_name,
@@ -348,9 +347,7 @@ const getBrandsProductList = async ({ brand_id, page = 1, limit = 20 }) => {
     ORDER BY fp.name ASC
     LIMIT $2 OFFSET $3;
   `;
-
   const { rows } = await pool.query(query, [brand_id, limit, offset]);
-
   if (!rows.length) return { products: [], total_count: 0, brand_name: null };
 
   return {
@@ -367,15 +364,12 @@ const getBrandsProductList = async ({ brand_id, page = 1, limit = 20 }) => {
 };
 
 /**
- * Model to fetch products by name (fuzzy) or product_id (exact)
- * Includes product image (display_order = 1), brand info, and essential fields.
- * Paginated Fuzzy Search for products, where each Page holds 20 products
+ * Fuzzy search / paginated list - still searches the product master but ranks by product name/description/brand/category
+ * Returns primary variant price and image as overview fields to preserve old API contract.
  */
 const getProductListBySearch = async ({ name, page = 1, limit = 20 }) => {
   if (!name) return { products: [], total_count: 0 };
-
   const offset = (page - 1) * limit;
-
   const searchTerm = name;
 
   const fuzzyQuery = `
@@ -384,9 +378,7 @@ const getProductListBySearch = async ({ name, page = 1, limit = 20 }) => {
         p.id,
         p.name,
         p.product_code,
-        p.price_per_unit,
         p.brand_id,
-        
         GREATEST(
           similarity(p.name, $1),
           similarity(p.description, $1),
@@ -401,27 +393,22 @@ const getProductListBySearch = async ({ name, page = 1, limit = 20 }) => {
       FROM products p
       LEFT JOIN brands b ON p.brand_id = b.id
     ),
-
     Filtered AS (
-      SELECT *
-      FROM ProductScores
-      WHERE score > 0.1
+      SELECT * FROM ProductScores WHERE score > 0.1
     ),
-
     CountResult AS (
       SELECT COUNT(*) AS total_count FROM Filtered
     )
-
-    SELECT 
+    SELECT
       f.id AS product_id,
       f.name AS product_name,
       f.product_code,
-      f.price_per_unit,
       b.name AS brand_name,
       (
-        SELECT pi.media_url FROM products_image pi
-        WHERE pi.product_id = f.id
-        AND pi.display_order = 1 LIMIT 1
+        SELECT v.mrp FROM product_variants v WHERE v.product_id = f.id ORDER BY v.created_at ASC LIMIT 1
+      ) AS price_per_unit,
+      (
+        SELECT pi.media_url FROM products_image pi WHERE pi.product_id = f.id AND pi.display_order = 1 LIMIT 1
       ) AS product_image,
       f.score,
       cr.total_count
@@ -431,11 +418,7 @@ const getProductListBySearch = async ({ name, page = 1, limit = 20 }) => {
     ORDER BY f.score DESC
     LIMIT $2 OFFSET $3;
   `;
-
-  const values = [searchTerm, limit, offset];
-
-  const { rows } = await pool.query(fuzzyQuery, values);
-
+  const { rows } = await pool.query(fuzzyQuery, [searchTerm, limit, offset]);
   if (!rows.length) return { products: [], total_count: 0 };
 
   return {
@@ -453,12 +436,10 @@ const getProductListBySearch = async ({ name, page = 1, limit = 20 }) => {
 };
 
 /**
- * Product Overview for listing section (non-fuzzy)
- * Returns essential product info only
+ * Overview paginated listing: returns product masters with primary variant price and image
  */
 const getProductOverviewPaginated = async ({ page = 1, limit = 20 }) => {
   const offset = (page - 1) * limit;
-
   const query = `
     WITH CountResult AS (
       SELECT COUNT(*) AS total_count FROM products
@@ -467,11 +448,12 @@ const getProductOverviewPaginated = async ({ page = 1, limit = 20 }) => {
       p.id AS product_id,
       p.name AS product_name,
       p.product_code,
-      p.price_per_unit,
+      (
+        SELECT v.mrp FROM product_variants v WHERE v.product_id = p.id ORDER BY v.created_at ASC LIMIT 1
+      ) AS price_per_unit,
       b.name AS brand_name,
       (
-        SELECT pi.media_url FROM products_image pi
-        WHERE pi.product_id = p.id AND pi.display_order = 1 LIMIT 1
+        SELECT pi.media_url FROM products_image pi WHERE pi.product_id = p.id AND pi.display_order = 1 LIMIT 1
       ) AS product_image,
       cr.total_count
     FROM products p
@@ -480,9 +462,7 @@ const getProductOverviewPaginated = async ({ page = 1, limit = 20 }) => {
     ORDER BY p.created_at DESC
     LIMIT $1 OFFSET $2;
   `;
-
   const { rows } = await pool.query(query, [limit, offset]);
-
   if (!rows.length) return { products: [], total_count: 0 };
 
   return {
@@ -499,14 +479,7 @@ const getProductOverviewPaginated = async ({ page = 1, limit = 20 }) => {
 };
 
 /**
- * Paginated product listing by category (ID or Name)
- * Returns product overview data with:
- * - product_id
- * - name
- * - brand_name
- * - main image
- * - price_per_unit
- * - total_count for pagination
+ * Get products by category (overview). Returns product master + primary variant price/image
  */
 const getProductsByCategory = async ({
   category_id,
@@ -514,15 +487,10 @@ const getProductsByCategory = async ({
   page = 1,
   limit = 20,
 }) => {
-  if (!category_id && !category_name) {
-    return { products: [], total_count: 0 };
-  }
-
+  if (!category_id && !category_name) return { products: [], total_count: 0 };
   const offset = (page - 1) * limit;
-
   let whereClause = "";
   let values = [];
-
   if (category_id) {
     whereClause = `WHERE c.id = $1`;
     values.push(category_id);
@@ -537,25 +505,21 @@ const getProductsByCategory = async ({
         p.id,
         p.name,
         p.product_code,
-        p.price_per_unit,
+        (
+          SELECT v.mrp FROM product_variants v WHERE v.product_id = p.id ORDER BY v.created_at ASC LIMIT 1
+        ) AS price_per_unit,
         p.brand_id,
         (
-          SELECT pi.media_url
-          FROM products_image pi
-          WHERE pi.product_id = p.id
-          AND pi.display_order = 1
-          LIMIT 1
+          SELECT pi.media_url FROM products_image pi WHERE pi.product_id = p.id AND pi.display_order = 1 LIMIT 1
         ) AS product_image
       FROM products p
       JOIN product_category pc ON pc.product_id = p.id
       JOIN categories c ON c.id = pc.category_id
       ${whereClause}
     ),
-
     CountResult AS (
       SELECT COUNT(*) AS total_count FROM FilteredProducts
     )
-
     SELECT
       fp.id AS product_id,
       fp.name AS product_name,
@@ -572,10 +536,7 @@ const getProductsByCategory = async ({
   `;
 
   const { rows } = await pool.query(paginatedQuery, [...values, limit, offset]);
-
-  if (!rows.length) {
-    return { products: [], total_count: 0 };
-  }
+  if (!rows.length) return { products: [], total_count: 0 };
 
   return {
     products: rows.map((row) => ({
@@ -592,10 +553,10 @@ const getProductsByCategory = async ({
 
 module.exports = {
   findIdByName,
-  createProduct,
+  findOrCreateProductByCode,
+  createVariant,
   insertProductCategory,
-  insertProductColor,
-  insertOneToMany,
+  insertProductHighlights,
   getAllProductDetails,
   searchProducts,
   getBrandsProductList,
@@ -603,4 +564,6 @@ module.exports = {
   getProductDetailsById,
   getProductsByCategory,
   getProductOverviewPaginated,
+  findOrCreateColour,
+  findOrCreateFinish,
 };
