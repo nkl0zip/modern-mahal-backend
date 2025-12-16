@@ -18,6 +18,7 @@ const adminRoutes = require("./routes/admin/admin.routes");
 const staffRoutes = require("./routes/staff/staff.routes");
 const adminIpRoutes = require("./routes/admin/ip.routes");
 const ticketRoutes = require("./routes/staff/ticket.routes");
+const productVariantRoutes = require("./routes/staff/productVariant.routes");
 
 const errorHandler = require("./middlewares/error.middleware");
 
@@ -50,6 +51,7 @@ app.use("/api/admin", adminRoutes);
 app.use("/api/staff", staffRoutes);
 app.use("/api/admin/ips", adminIpRoutes);
 app.use("/api/tickets", ticketRoutes);
+app.use("/api/products/variant", productVariantRoutes);
 
 app.use(errorHandler);
 

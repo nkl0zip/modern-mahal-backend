@@ -101,8 +101,8 @@ const createVariant = async (productId, variantData) => {
 
   const query = `
     INSERT INTO product_variants
-      (product_id, sub_code, colour_id, finish_id, mrp, alloy, weight_capacity, usability, in_box_content, tags)
-    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+      (product_id, sub_code, colour_id, finish_id, mrp, alloy, weight_capacity, usability, in_box_content, tags, status)
+    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
     RETURNING *;
   `;
   const values = [
@@ -116,6 +116,7 @@ const createVariant = async (productId, variantData) => {
     variantData.usability || null,
     variantData.in_box_content || null,
     variantData.tags || null,
+    variantData.status,
   ];
   const result = await pool.query(query, values);
   return result.rows[0];
@@ -137,7 +138,9 @@ async function insertProductHighlights(product_id, highlightsArr) {
   if (!highlightsArr || highlightsArr.length === 0) return;
   const query = `
     INSERT INTO highlights (product_id, text)
-    VALUES ${highlightsArr.map((_, i) => `($1, $${i + 2})`).join(", ")};
+    VALUES ${highlightsArr
+      .map((_, i) => `($1, $${i + 2})`)
+      .join(", ")} ON CONFLICT (product_id, text) DO NOTHING;
   `;
   await pool.query(query, [product_id, ...highlightsArr]);
 }
@@ -173,7 +176,8 @@ async function getAllProductDetails() {
           'weight_capacity', v.weight_capacity,
           'usability', v.usability,
           'in_box_content', v.in_box_content,
-          'tags', v.tags
+          'tags', v.tags,
+          'status', v.status
         )
         FROM product_variants v
         WHERE v.product_id = p.id

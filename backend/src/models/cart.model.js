@@ -105,7 +105,7 @@ const addOrUpdateCartItem = async ({ cart_id, variant_id, quantity }) => {
 
     // Validate variant & get price
     const variantRes = await client.query(
-      `SELECT id, mrp FROM product_variants WHERE id = $1 LIMIT 1`,
+      `SELECT id, mrp, status FROM product_variants WHERE id = $1 LIMIT 1`,
       [variant_id]
     );
 
@@ -113,6 +113,13 @@ const addOrUpdateCartItem = async ({ cart_id, variant_id, quantity }) => {
       throw { status: 404, message: "Variant not found" };
 
     const variant = variantRes.rows[0];
+
+    if (variant.status !== "ACTIVE") {
+      throw {
+        status: 400,
+        message: `This product variant is currently ${variant.status}`,
+      };
+    }
 
     // Check if variant already in cart
     const existing = await client.query(

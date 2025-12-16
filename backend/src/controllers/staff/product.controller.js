@@ -69,6 +69,12 @@ function parseArr(value) {
  */
 const uploadProductsFromExcel = async (req, res, next) => {
   try {
+    if (!req.file) {
+      return res.status(400).json({
+        message: "Excel file is required. Please upload a file.",
+      });
+    }
+
     const filePath = req.file.path;
 
     // Parse Excel file
@@ -152,6 +158,7 @@ const uploadProductsFromExcel = async (req, res, next) => {
         tags: Array.isArray(row["tags"])
           ? row["tags"].join(",")
           : row["tags"] || null,
+        status: "ACTIVE",
       };
 
       await createVariant(createdProduct.id, variantData);
@@ -194,6 +201,7 @@ const createSingleProductHandler = async (req, res, next) => {
       in_box_content,
       tags,
       highlights,
+      status,
     } = req.body;
 
     // Brand lookup
@@ -242,6 +250,7 @@ const createSingleProductHandler = async (req, res, next) => {
         ? in_box_content.join(",")
         : in_box_content || null,
       tags: Array.isArray(tags) ? tags.join(",") : tags || null,
+      status: status,
     };
 
     const createdVariant = await createVariant(createdProduct.id, variantData);
@@ -304,6 +313,7 @@ const createVariantHandler = async (req, res, next) => {
       usability,
       in_box_content,
       tags,
+      status,
     } = req.body;
 
     // 1) Ensure product exists
@@ -343,6 +353,7 @@ const createVariantHandler = async (req, res, next) => {
       usability: usability || null,
       in_box_content: in_box_content || null,
       tags: tags || null,
+      status: status,
     };
 
     // 5) Create variant
