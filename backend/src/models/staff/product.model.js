@@ -675,6 +675,75 @@ const getProductsBySegment = async ({
   };
 };
 
+/**
+ * Variant-level paginated overview for Admin & Staff
+ * Returns all variants sorted by product_code (ASC), then sub_code (ASC)
+ */
+const getVariantsOverviewPaginated = async ({ page = 1, limit = 20 }) => {
+  const offset = (page - 1) * limit;
+
+  const query = `
+  WITH VariantData AS (
+    SELECT
+      p.id AS product_id,
+      v.id AS variant_id,
+      p.name AS product_name,
+      p.product_code,
+      v.sub_code,
+      v.created_at,
+      b.name AS brand,
+      p.segment,
+      v.status,
+      v.mrp AS price,
+      (
+        SELECT ARRAY_AGG(DISTINCT c.name)
+        FROM product_category pc
+        JOIN categories c ON pc.category_id = c.id
+        WHERE pc.product_id = p.id
+      ) AS categories
+    FROM product_variants v
+    JOIN products p ON v.product_id = p.id
+    LEFT JOIN brands b ON p.brand_id = b.id
+  ),
+  CountResult AS (
+    SELECT COUNT(*) AS total_count FROM VariantData
+  )
+  SELECT
+    vd.*,
+    cr.total_count
+  FROM VariantData vd
+  CROSS JOIN CountResult cr
+  ORDER BY vd.product_code ASC, vd.sub_code ASC
+  LIMIT $1 OFFSET $2;
+`;
+
+  const { rows } = await pool.query(query, [limit, offset]);
+
+  if (!rows.length) {
+    return { variants: [], total_count: 0 };
+  }
+
+  return {
+    variants: rows.map((row) => ({
+      product_id: row.product_id,
+      variant_id: row.variant_id,
+      product_name: row.product_name,
+      product_code: row.product_code,
+      sub_code: row.sub_code,
+      created_at: row.created_at,
+      brand: row.brand,
+      segment: row.segment,
+      available_quantity: row.reserved_quantity
+        ? Math.max(0, row.reserved_quantity)
+        : 0,
+      status: row.status,
+      price: row.price,
+      category: row.categories || [],
+    })),
+    total_count: parseInt(rows[0].total_count, 10),
+  };
+};
+
 module.exports = {
   findIdByName,
   findOrCreateProductByCode,
@@ -693,4 +762,5 @@ module.exports = {
   findSegmentIdByName,
   insertProductSegments,
   getProductsBySegment,
+  getVariantsOverviewPaginated,
 };

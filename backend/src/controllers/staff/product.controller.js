@@ -20,6 +20,7 @@ const {
   getProductsBySegment,
   findSegmentIdByName,
   insertProductSegments,
+  getVariantsOverviewPaginated,
 } = require("../../models/staff/product.model");
 
 /* ---------------------------------------------------
@@ -628,6 +629,43 @@ const getProductsBySegmentHandler = async (req, res, next) => {
   }
 };
 
+/**
+ * GET /api/products/variants/overview
+ * Admin & Staff – paginated variant-level listing
+ */
+const getVariantsOverviewPaginatedHandler = async (req, res, next) => {
+  try {
+    const { page = 1, limit = 20 } = req.query;
+
+    const pageNum = parseInt(page, 10);
+    const limitNum = parseInt(limit, 10);
+
+    if (pageNum <= 0 || limitNum <= 0) {
+      return res.status(400).json({
+        message: "page and limit must be positive integers",
+      });
+    }
+
+    const { variants, total_count } = await getVariantsOverviewPaginated({
+      page: pageNum,
+      limit: limitNum,
+    });
+
+    return res.status(200).json({
+      message: "Variants overview fetched successfully.",
+      page: pageNum,
+      per_page: limitNum,
+      total_count,
+      total_pages: Math.ceil(total_count / limitNum),
+      next_page: pageNum * limitNum < total_count ? pageNum + 1 : null,
+      prev_page: pageNum > 1 ? pageNum - 1 : null,
+      variants,
+    });
+  } catch (err) {
+    next(err);
+  }
+};
+
 module.exports = {
   uploadProductsFromExcel,
   getAllProductsHandler,
@@ -640,4 +678,5 @@ module.exports = {
   getProductOverviewPaginatedHandler,
   createVariantHandler,
   getProductsBySegmentHandler,
+  getVariantsOverviewPaginatedHandler,
 };

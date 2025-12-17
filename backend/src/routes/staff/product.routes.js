@@ -14,6 +14,7 @@ const {
   getProductOverviewPaginatedHandler,
   createVariantHandler,
   getProductsBySegmentHandler,
+  getVariantsOverviewPaginatedHandler,
 } = require("../../controllers/staff/product.controller");
 
 // Configureing multer for excel upload
@@ -79,5 +80,9 @@ router.get("/segment/list", getProductsBySegmentHandler);
 // Allowed for all roles
 // GET /api/products/:id
 router.get("/:id", getProductDetailsByIdHandler);
+
+// Variant overview (Admin / Staff)
+// GET /api/products/variants/overview
+router.get("/variants/overview", getVariantsOverviewPaginatedHandler);
 
 module.exports = router;
