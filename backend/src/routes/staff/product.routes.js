@@ -13,6 +13,7 @@ const {
   getProductsByCategoryHandler,
   getProductOverviewPaginatedHandler,
   createVariantHandler,
+  getProductsBySegmentHandler,
 } = require("../../controllers/staff/product.controller");
 
 // Configureing multer for excel upload
@@ -70,6 +71,10 @@ router.post("/:productId/variants", createVariantHandler);
 // Allowed for all roles
 // GET /api/products/overview?page=1&limit=20
 router.get("/overview", getProductOverviewPaginatedHandler);
+
+// Allowed for all roles
+// GET /api/products/segment/list?id=uuid OR ?name=Patch-Fittings
+router.get("/segment/list", getProductsBySegmentHandler);
 
 // Allowed for all roles
 // GET /api/products/:id

@@ -166,6 +166,12 @@ async function getAllProductDetails() {
         WHERE pc.product_id = p.id
       ) AS product_category,
       ARRAY(
+        SELECT s.name
+        FROM product_segments ps
+        JOIN segments s ON ps.segment_id = s.id
+        WHERE ps.product_id = p.id
+      ) AS segments,
+      ARRAY(
         SELECT jsonb_build_object(
           'id', v.id,
           'sub_code', v.sub_code,
@@ -225,6 +231,12 @@ async function getProductDetailsById(productId) {
         JOIN categories c ON pc.category_id = c.id
         WHERE pc.product_id = p.id
       ) AS product_category,
+      ARRAY(
+        SELECT s.name
+        FROM product_segments ps
+        JOIN segments s ON ps.segment_id = s.id
+        WHERE ps.product_id = p.id
+      ) AS segments,
       ARRAY(
         SELECT jsonb_build_object(
           'id', v.id,
@@ -555,6 +567,114 @@ const getProductsByCategory = async ({
   };
 };
 
+// Find segment id by name (case-insensitive)
+const findSegmentIdByName = async (name) => {
+  if (!name) return null;
+
+  const query = `
+    SELECT id FROM segments
+    WHERE LOWER(name) = LOWER($1)
+    LIMIT 1;
+  `;
+  const { rows } = await pool.query(query, [name.trim()]);
+  return rows[0]?.id || null;
+};
+
+// Insert product-segment mapping
+const insertProductSegments = async (product_id, segment_ids) => {
+  if (!segment_ids || segment_ids.length === 0) return;
+
+  const values = segment_ids.map((_, i) => `($1, $${i + 2})`).join(", ");
+
+  const query = `
+    INSERT INTO product_segments (product_id, segment_id)
+    VALUES ${values}
+    ON CONFLICT DO NOTHING;
+  `;
+
+  await pool.query(query, [product_id, ...segment_ids]);
+};
+
+const getProductsBySegment = async ({
+  segment_id,
+  segment_name,
+  page = 1,
+  limit = 20,
+}) => {
+  const offset = (page - 1) * limit;
+
+  let whereClause = "";
+  let values = [];
+
+  if (segment_id) {
+    whereClause = "WHERE s.id = $1";
+    values.push(segment_id);
+  } else {
+    whereClause = "WHERE LOWER(s.name) = LOWER($1)";
+    values.push(segment_name);
+  }
+
+  const query = `
+    WITH FilteredProducts AS (
+      SELECT
+        p.id,
+        p.name,
+        p.product_code,
+        (
+          SELECT v.mrp
+          FROM product_variants v
+          WHERE v.product_id = p.id
+          ORDER BY v.created_at ASC
+          LIMIT 1
+        ) AS price_per_unit,
+        p.brand_id,
+        (
+          SELECT pi.media_url
+          FROM products_image pi
+          WHERE pi.product_id = p.id
+          AND pi.display_order = 1
+          LIMIT 1
+        ) AS product_image
+      FROM products p
+      JOIN product_segments ps ON ps.product_id = p.id
+      JOIN segments s ON s.id = ps.segment_id
+      ${whereClause}
+    ),
+    CountResult AS (
+      SELECT COUNT(*) AS total_count FROM FilteredProducts
+    )
+    SELECT
+      fp.id AS product_id,
+      fp.name AS product_name,
+      fp.product_code,
+      fp.price_per_unit,
+      b.name AS brand_name,
+      fp.product_image,
+      cr.total_count
+    FROM FilteredProducts fp
+    LEFT JOIN brands b ON fp.brand_id = b.id
+    CROSS JOIN CountResult cr
+    ORDER BY fp.name ASC
+    LIMIT $2 OFFSET $3;
+  `;
+
+  const { rows } = await pool.query(query, [...values, limit, offset]);
+
+  if (!rows.length) return { products: [], total_count: 0 };
+
+  return {
+    products: rows.map((r) => ({
+      product_id: r.product_id,
+      product_name: r.product_name,
+      product_code: r.product_code,
+      price_per_unit: r.price_per_unit,
+      brand_name: r.brand_name,
+      product_image: r.product_image,
+    })),
+    total_count: parseInt(rows[0].total_count, 10),
+  };
+};
+
 module.exports = {
   findIdByName,
   findOrCreateProductByCode,
@@ -570,4 +690,7 @@ module.exports = {
   getProductOverviewPaginated,
   findOrCreateColour,
   findOrCreateFinish,
+  findSegmentIdByName,
+  insertProductSegments,
+  getProductsBySegment,
 };

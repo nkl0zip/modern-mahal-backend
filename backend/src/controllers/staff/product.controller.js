@@ -17,6 +17,9 @@ const {
   getProductsByCategory,
   getProductOverviewPaginated,
   findOrCreateFinish,
+  getProductsBySegment,
+  findSegmentIdByName,
+  insertProductSegments,
 } = require("../../models/staff/product.model");
 
 /* ---------------------------------------------------
@@ -107,6 +110,20 @@ const uploadProductsFromExcel = async (req, res, next) => {
       }
     }
 
+    /* ---------- Validate Segments ---------- */
+    for (const row of rows) {
+      const segmentNames = parseArr(row["segment"]);
+
+      for (const seg of segmentNames) {
+        const segId = await findSegmentIdByName(seg);
+        if (!segId) {
+          return res.status(400).json({
+            message: `Segment "${seg}" does not exist. Please create it first.`,
+          });
+        }
+      }
+    }
+
     /* ---------- Process Rows ---------- */
     for (const row of rows) {
       if (!row["brand"] || !row["product code"]) continue;
@@ -136,6 +153,17 @@ const uploadProductsFromExcel = async (req, res, next) => {
       }
 
       await insertProductCategory(createdProduct.id, categoryIds);
+
+      /* ---------- Segments ---------- */
+      const segmentNames = parseArr(row["segment"]);
+      const segmentIds = [];
+
+      for (const seg of segmentNames) {
+        const segId = await findSegmentIdByName(seg);
+        if (segId) segmentIds.push(segId);
+      }
+
+      await insertProductSegments(createdProduct.id, segmentIds);
 
       /* ---------- Highlights (robust) ---------- */
       const highlightsArr = parseArr(row["highlights"]);
@@ -231,6 +259,22 @@ const createSingleProductHandler = async (req, res, next) => {
       if (catId) categoryIds.push(catId);
     }
     await insertProductCategory(createdProduct.id, categoryIds);
+
+    /* ---------- Segments ---------- */
+    const segmentNames = parseArr(segment);
+    const segmentIds = [];
+
+    for (const seg of segmentNames) {
+      const segId = await findSegmentIdByName(seg);
+      if (!segId) {
+        return res.status(400).json({
+          message: `Segment "${seg}" does not exist.`,
+        });
+      }
+      segmentIds.push(segId);
+    }
+
+    await insertProductSegments(createdProduct.id, segmentIds);
 
     // Product highlights (product-level)
     await insertProductHighlights(createdProduct.id, parseArr(highlights));
@@ -545,6 +589,45 @@ const getProductsByCategoryHandler = async (req, res, next) => {
   }
 };
 
+const getProductsBySegmentHandler = async (req, res, next) => {
+  try {
+    const { id, name, page = 1 } = req.query;
+
+    if (!id && !name) {
+      return res.status(400).json({
+        message: "Please provide segment id or name",
+      });
+    }
+
+    const pageNum = parseInt(page, 10) || 1;
+
+    const { products, total_count } = await getProductsBySegment({
+      segment_id: id,
+      segment_name: name,
+      page: pageNum,
+      limit: 20,
+    });
+
+    if (!products.length) {
+      return res.status(404).json({
+        message: "No products found for this segment",
+        products: [],
+      });
+    }
+
+    res.status(200).json({
+      message: "Segment products fetched successfully",
+      page: pageNum,
+      per_page: 20,
+      total_count,
+      total_pages: Math.ceil(total_count / 20),
+      products,
+    });
+  } catch (err) {
+    next(err);
+  }
+};
+
 module.exports = {
   uploadProductsFromExcel,
   getAllProductsHandler,
@@ -556,4 +639,5 @@ module.exports = {
   getProductsByCategoryHandler,
   getProductOverviewPaginatedHandler,
   createVariantHandler,
+  getProductsBySegmentHandler,
 };
