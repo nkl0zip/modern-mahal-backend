@@ -87,10 +87,54 @@ const findCategoryIdsByNames = async (names = []) => {
   return rows.map((r) => r.id);
 };
 
+/**
+ * Fetch all segments belonging to a category
+ * Accepts category_id OR category_name
+ */
+const getSegmentsByCategory = async ({ category_id, category_name }) => {
+  if (!category_id && !category_name) {
+    throw {
+      status: 400,
+      message: "category_id or category_name is required",
+    };
+  }
+
+  let whereClause = "";
+  let values = [];
+
+  if (category_id) {
+    whereClause = "c.id = $1";
+    values.push(category_id);
+  } else {
+    whereClause = "LOWER(c.name) = LOWER($1)";
+    values.push(category_name.trim());
+  }
+
+  const query = `
+    SELECT DISTINCT
+      s.id,
+      s.name,
+      s.slug,
+      s.description,
+      s.created_at,
+      ARRAY_AGG(DISTINCT c.name) AS categories
+    FROM segments s
+    JOIN category_segments sc ON sc.segment_id = s.id
+    JOIN categories c ON c.id = sc.category_id
+    WHERE ${whereClause}
+    GROUP BY s.id
+    ORDER BY s.name ASC;
+  `;
+
+  const { rows } = await pool.query(query, values);
+  return rows;
+};
+
 module.exports = {
   getAllSegmentsWithCategories,
   createSegment,
   mapSegmentToCategories,
   deleteSegmentById,
   findCategoryIdsByNames,
+  getSegmentsByCategory,
 };

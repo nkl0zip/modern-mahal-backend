@@ -4,6 +4,7 @@ const {
   mapSegmentToCategories,
   deleteSegmentById,
   findCategoryIdsByNames,
+  getSegmentsByCategory,
 } = require("../../models/admin/segment.model");
 
 /**
@@ -86,8 +87,44 @@ const deleteSegmentHandler = async (req, res, next) => {
   }
 };
 
+/**
+ * GET /api/segments/category
+ * ?id=uuid OR ?name=category-name
+ */
+const getSegmentsByCategoryHandler = async (req, res, next) => {
+  try {
+    const { id, name } = req.query;
+
+    if (!id && !name) {
+      return res.status(400).json({
+        message: "Please provide category id or category name",
+      });
+    }
+
+    const segments = await getSegmentsByCategory({
+      category_id: id,
+      category_name: name,
+    });
+
+    if (!segments.length) {
+      return res.status(404).json({
+        message: "No segments found for this category",
+        segments: [],
+      });
+    }
+
+    return res.status(200).json({
+      message: "Segments fetched successfully",
+      segments,
+    });
+  } catch (err) {
+    next(err);
+  }
+};
+
 module.exports = {
   listSegmentsHandler,
   createSegmentHandler,
   deleteSegmentHandler,
+  getSegmentsByCategoryHandler,
 };
