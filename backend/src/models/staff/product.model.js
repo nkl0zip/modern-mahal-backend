@@ -80,6 +80,14 @@ const findOrCreateProductByCode = async (product) => {
  *  mrp, alloy, weight_capacity, usability, in_box_content, tags
  */
 const createVariant = async (productId, variantData) => {
+  // Skip if sub_code is null or empty - variants without sub_code can be duplicated
+  if (!variantData.sub_code || variantData.sub_code.trim() === "") {
+    console.warn(
+      `Variant skipped: No sub_code provided for product ${productId}`
+    );
+    return null;
+  }
+
   // find/create colour & finish
   let colourId = null;
   if (!variantData.colour_id) {
@@ -102,12 +110,25 @@ const createVariant = async (productId, variantData) => {
   const query = `
     INSERT INTO product_variants
       (product_id, sub_code, colour_id, finish_id, mrp, alloy, weight_capacity, usability, in_box_content, tags, status)
-    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
-    RETURNING *;
+    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+    ON CONFLICT (sub_code) 
+    DO UPDATE SET
+      product_id = EXCLUDED.product_id,
+      colour_id = EXCLUDED.colour_id,
+      finish_id = EXCLUDED.finish_id,
+      mrp = EXCLUDED.mrp,
+      alloy = EXCLUDED.alloy,
+      weight_capacity = EXCLUDED.weight_capacity,
+      usability = EXCLUDED.usability,
+      in_box_content = EXCLUDED.in_box_content,
+      tags = EXCLUDED.tags,
+      status = EXCLUDED.status
+    RETURNING *, 
+      (xmax = 0) AS is_new;
   `;
   const values = [
     productId,
-    variantData.sub_code || null,
+    variantData.sub_code.trim(),
     colourId,
     finishId,
     variantData.mrp || null,
