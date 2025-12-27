@@ -769,6 +769,311 @@ const getVariantsOverviewPaginated = async ({ page = 1, limit = 20 }) => {
   };
 };
 
+/**
+ * Update product details (name, description, brand_id, warranty)
+ * Does not update product_code (should remain unique and constant)
+ */
+const updateProductDetails = async (product_id, updateData) => {
+  const { name, brand_id, description, warranty } = updateData;
+
+  // Build dynamic query based on provided fields
+  const fields = [];
+  const values = [];
+  let paramCounter = 1;
+
+  if (name !== undefined) {
+    fields.push(`name = $${paramCounter}`);
+    values.push(name);
+    paramCounter++;
+  }
+
+  if (brand_id !== undefined) {
+    fields.push(`brand_id = $${paramCounter}`);
+    values.push(brand_id);
+    paramCounter++;
+  }
+
+  if (description !== undefined) {
+    fields.push(`description = $${paramCounter}`);
+    values.push(description);
+    paramCounter++;
+  }
+
+  if (warranty !== undefined) {
+    fields.push(`warranty = $${paramCounter}`);
+    values.push(warranty);
+    paramCounter++;
+  }
+
+  // Always update the updated_at timestamp
+  fields.push(`updated_at = CURRENT_TIMESTAMP`);
+
+  if (fields.length === 1) {
+    // Only updated_at was added
+    throw new Error("No fields to update");
+  }
+
+  values.push(product_id);
+
+  const query = `
+    UPDATE products
+    SET ${fields.join(", ")}
+    WHERE id = $${paramCounter}
+    RETURNING 
+      *,
+      (SELECT name FROM brands WHERE id = products.brand_id) AS brand_name;
+  `;
+
+  const { rows } = await pool.query(query, values);
+  return rows[0] || null;
+};
+
+/**
+ * Update product categories (replace existing categories)
+ */
+const updateProductCategories = async (product_id, category_ids) => {
+  // Start transaction to ensure atomic update
+  const client = await pool.connect();
+
+  try {
+    await client.query("BEGIN");
+
+    // Delete existing categories
+    await client.query("DELETE FROM product_category WHERE product_id = $1", [
+      product_id,
+    ]);
+
+    // Insert new categories if provided
+    if (category_ids && category_ids.length > 0) {
+      const values = category_ids.map((_, i) => `($1, $${i + 2})`).join(", ");
+      const query = `
+        INSERT INTO product_category (product_id, category_id)
+        VALUES ${values}
+        ON CONFLICT DO NOTHING;
+      `;
+      await client.query(query, [product_id, ...category_ids]);
+    }
+
+    // Get updated category names
+    const { rows } = await client.query(
+      `SELECT c.name 
+       FROM categories c
+       JOIN product_category pc ON c.id = pc.category_id
+       WHERE pc.product_id = $1`,
+      [product_id]
+    );
+
+    await client.query("COMMIT");
+
+    return rows.map((row) => row.name);
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
+};
+
+/**
+ * Update product segments (replace existing segments)
+ */
+const updateProductSegments = async (product_id, segment_ids) => {
+  const client = await pool.connect();
+
+  try {
+    await client.query("BEGIN");
+
+    // Delete existing segments
+    await client.query("DELETE FROM product_segments WHERE product_id = $1", [
+      product_id,
+    ]);
+
+    // Insert new segments if provided
+    if (segment_ids && segment_ids.length > 0) {
+      const values = segment_ids.map((_, i) => `($1, $${i + 2})`).join(", ");
+      const query = `
+        INSERT INTO product_segments (product_id, segment_id)
+        VALUES ${values}
+        ON CONFLICT DO NOTHING;
+      `;
+      await client.query(query, [product_id, ...segment_ids]);
+    }
+
+    // Get updated segment names
+    const { rows } = await client.query(
+      `SELECT s.name 
+       FROM segments s
+       JOIN product_segments ps ON s.id = ps.segment_id
+       WHERE ps.product_id = $1`,
+      [product_id]
+    );
+
+    await client.query("COMMIT");
+
+    return rows.map((row) => row.name);
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
+};
+
+/**
+ * Soft delete product (mark all variants as DISCONTINUED)
+ * We don't delete from products table to maintain referential integrity
+ */
+const softDeleteProduct = async (product_id) => {
+  const client = await pool.connect();
+
+  try {
+    await client.query("BEGIN");
+
+    // Mark all variants as DISCONTINUED
+    const { rows: variants } = await client.query(
+      `UPDATE product_variants 
+       SET status = 'DISCONTINUED'
+       WHERE product_id = $1
+       RETURNING id, sub_code`,
+      [product_id]
+    );
+
+    // Get product info before any deletion
+    const { rows: productRows } = await client.query(
+      `SELECT p.*, b.name as brand_name 
+       FROM products p 
+       LEFT JOIN brands b ON p.brand_id = b.id 
+       WHERE p.id = $1`,
+      [product_id]
+    );
+
+    if (productRows.length === 0) {
+      throw new Error("Product not found");
+    }
+
+    await client.query("COMMIT");
+
+    return {
+      product: productRows[0],
+      updated_variants: variants,
+    };
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
+};
+
+/**
+ * Hard delete product (ADMIN only - use with extreme caution)
+ * Deletes product and all associated data
+ */
+const hardDeleteProduct = async (product_id) => {
+  const client = await pool.connect();
+
+  try {
+    await client.query("BEGIN");
+
+    // Check if product has any active cart items
+    const cartCheck = await client.query(
+      `SELECT COUNT(*) as count 
+       FROM cart_items ci
+       JOIN product_variants pv ON ci.variant_id = pv.id
+       WHERE pv.product_id = $1`,
+      [product_id]
+    );
+
+    if (parseInt(cartCheck.rows[0].count) > 0) {
+      throw new Error(
+        `Cannot delete product: Variants are in ${cartCheck.rows[0].count} cart items`
+      );
+    }
+
+    // Check if product has any orders (you might have an orders table)
+    // Add order check here if you have an orders table
+
+    // Get product info before deletion for response
+    const { rows: productRows } = await client.query(
+      `SELECT * FROM products WHERE id = $1`,
+      [product_id]
+    );
+
+    if (productRows.length === 0) {
+      throw new Error("Product not found");
+    }
+
+    // Delete in correct order to respect foreign keys
+    // 1. Delete from highlights
+    await client.query("DELETE FROM highlights WHERE product_id = $1", [
+      product_id,
+    ]);
+
+    // 2. Delete from tags
+    await client.query("DELETE FROM tags WHERE product_id = $1", [product_id]);
+
+    // 3. Delete from alloys
+    await client.query("DELETE FROM alloys WHERE product_id = $1", [
+      product_id,
+    ]);
+
+    // 4. Delete from usability
+    await client.query("DELETE FROM usability WHERE product_id = $1", [
+      product_id,
+    ]);
+
+    // 5. Delete from in_box_content
+    await client.query("DELETE FROM in_box_content WHERE product_id = $1", [
+      product_id,
+    ]);
+
+    // 6. Delete images (need to check for variant-specific images first)
+    await client.query("DELETE FROM products_image WHERE product_id = $1", [
+      product_id,
+    ]);
+
+    // 7. Delete product-category associations
+    await client.query("DELETE FROM product_category WHERE product_id = $1", [
+      product_id,
+    ]);
+
+    // 8. Delete product-segment associations
+    await client.query("DELETE FROM product_segments WHERE product_id = $1", [
+      product_id,
+    ]);
+
+    // 9. Delete variants (cascades to variant-specific images)
+    await client.query("DELETE FROM product_variants WHERE product_id = $1", [
+      product_id,
+    ]);
+
+    // 10. Delete wishlist entries
+    await client.query("DELETE FROM wishlists WHERE product_id = $1", [
+      product_id,
+    ]);
+
+    // 11. Delete product reviews
+    await client.query("DELETE FROM product_reviews WHERE product_id = $1", [
+      product_id,
+    ]);
+
+    // 12. Finally delete the product
+    const { rows: deletedProduct } = await client.query(
+      "DELETE FROM products WHERE id = $1 RETURNING *",
+      [product_id]
+    );
+
+    await client.query("COMMIT");
+
+    return deletedProduct[0];
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
+};
+
 module.exports = {
   findIdByName,
   findOrCreateProductByCode,
@@ -788,4 +1093,9 @@ module.exports = {
   insertProductSegments,
   getProductsBySegment,
   getVariantsOverviewPaginated,
+  updateProductDetails,
+  updateProductCategories,
+  updateProductSegments,
+  softDeleteProduct,
+  hardDeleteProduct,
 };

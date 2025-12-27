@@ -1,5 +1,6 @@
 // backend/controllers/staff/product.controller.js
 const path = require("path");
+const pool = require("../../config/db");
 const fs = require("fs");
 const { parseExcel } = require("../../utils/excelParser");
 const {
@@ -21,6 +22,11 @@ const {
   findSegmentIdByName,
   insertProductSegments,
   getVariantsOverviewPaginated,
+  updateProductDetails,
+  updateProductCategories,
+  updateProductSegments,
+  softDeleteProduct,
+  hardDeleteProduct,
 } = require("../../models/staff/product.model");
 
 /* ---------------------------------------------------
@@ -666,6 +672,220 @@ const getVariantsOverviewPaginatedHandler = async (req, res, next) => {
   }
 };
 
+/**
+ * PUT /api/products/:id
+ * ADMIN / STAFF - Update product details
+ */
+const updateProductHandler = async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const { name, brand_id, description, warranty, categories, segments } =
+      req.body;
+
+    if (!id) {
+      return res.status(400).json({ message: "Product ID is required" });
+    }
+
+    // Validate product exists
+    const existingProduct = await getProductDetailsById(id);
+    if (!existingProduct) {
+      return res.status(404).json({ message: "Product not found" });
+    }
+
+    // Validate brand_id if provided
+    if (brand_id) {
+      const brandCheck = await pool.query(
+        "SELECT id FROM brands WHERE id = $1",
+        [brand_id]
+      );
+      if (brandCheck.rows.length === 0) {
+        return res.status(400).json({ message: "Invalid brand_id provided" });
+      }
+    }
+
+    // Prepare product update data
+    const updateData = {};
+    if (name !== undefined) updateData.name = name;
+    if (brand_id !== undefined) updateData.brand_id = brand_id;
+    if (description !== undefined) updateData.description = description;
+    if (warranty !== undefined) updateData.warranty = warranty;
+
+    let updatedProduct = null;
+    let updatedCategories = null;
+    let updatedSegments = null;
+
+    // Update product details if any fields provided
+    if (Object.keys(updateData).length > 0) {
+      updatedProduct = await updateProductDetails(id, updateData);
+    }
+
+    // Update categories if provided
+    if (categories !== undefined) {
+      const categoryIds = Array.isArray(categories) ? categories : [];
+      // Validate category IDs exist
+      if (categoryIds.length > 0) {
+        const { rows } = await pool.query(
+          "SELECT id FROM categories WHERE id = ANY($1)",
+          [categoryIds]
+        );
+        if (rows.length !== categoryIds.length) {
+          return res.status(400).json({
+            message: "One or more category IDs are invalid",
+          });
+        }
+      }
+      updatedCategories = await updateProductCategories(id, categoryIds);
+    }
+
+    // Update segments if provided
+    if (segments !== undefined) {
+      const segmentIds = Array.isArray(segments) ? segments : [];
+      // Validate segment IDs exist
+      if (segmentIds.length > 0) {
+        const { rows } = await pool.query(
+          "SELECT id FROM segments WHERE id = ANY($1)",
+          [segmentIds]
+        );
+        if (rows.length !== segmentIds.length) {
+          return res.status(400).json({
+            message: "One or more segment IDs are invalid",
+          });
+        }
+      }
+      updatedSegments = await updateProductSegments(id, segmentIds);
+    }
+
+    // If nothing was updated
+    if (!updatedProduct && categories === undefined && segments === undefined) {
+      return res.status(400).json({
+        message: "No fields provided for update",
+      });
+    }
+
+    // Get the full updated product details
+    const fullProductDetails = await getProductDetailsById(id);
+
+    return res.status(200).json({
+      message: "Product updated successfully",
+      product: fullProductDetails,
+      changes: {
+        details_updated: !!updatedProduct,
+        categories_updated: categories !== undefined,
+        segments_updated: segments !== undefined,
+      },
+    });
+  } catch (err) {
+    next(err);
+  }
+};
+
+/**
+ * PATCH /api/products/:id/soft-delete
+ * ADMIN / STAFF - Soft delete product (mark all variants as DISCONTINUED)
+ */
+const softDeleteProductHandler = async (req, res, next) => {
+  try {
+    const { id } = req.params;
+
+    if (!id) {
+      return res.status(400).json({ message: "Product ID is required" });
+    }
+
+    // Validate product exists
+    const existingProduct = await getProductDetailsById(id);
+    if (!existingProduct) {
+      return res.status(404).json({ message: "Product not found" });
+    }
+
+    // Check if already all variants are DISCONTINUED
+    const { rows: variants } = await pool.query(
+      "SELECT COUNT(*) as total, COUNT(*) FILTER (WHERE status != 'DISCONTINUED') as active FROM product_variants WHERE product_id = $1",
+      [id]
+    );
+
+    if (parseInt(variants[0].active) === 0) {
+      return res.status(400).json({
+        message: "Product already has all variants marked as DISCONTINUED",
+        product: existingProduct,
+      });
+    }
+
+    const result = await softDeleteProduct(id);
+
+    return res.status(200).json({
+      message:
+        "Product soft deleted successfully (all variants marked as DISCONTINUED)",
+      product: result.product,
+      updated_variants_count: result.updated_variants.length,
+      updated_variants: result.updated_variants,
+    });
+  } catch (err) {
+    next(err);
+  }
+};
+
+/**
+ * DELETE /api/products/:id
+ * ADMIN only - Hard delete product (permanent deletion)
+ */
+const hardDeleteProductHandler = async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const { force } = req.query; // Optional force flag
+
+    if (!id) {
+      return res.status(400).json({ message: "Product ID is required" });
+    }
+
+    // Validate product exists
+    const existingProduct = await getProductDetailsById(id);
+    if (!existingProduct) {
+      return res.status(404).json({ message: "Product not found" });
+    }
+
+    let deletedProduct;
+
+    if (force === "true") {
+      // Force delete even with cart items (ADMIN override)
+      // This requires a different approach - we might need to handle cart items first
+      // For now, we'll reject force delete if cart items exist
+      const cartCheck = await pool.query(
+        `SELECT COUNT(*) as count 
+         FROM cart_items ci
+         JOIN product_variants pv ON ci.variant_id = pv.id
+         WHERE pv.product_id = $1`,
+        [id]
+      );
+
+      if (parseInt(cartCheck.rows[0].count) > 0) {
+        return res.status(400).json({
+          message: `Cannot force delete: Product variants are in ${cartCheck.rows[0].count} cart items. Remove from carts first.`,
+          suggestion: "Use soft delete instead",
+        });
+      }
+
+      deletedProduct = await hardDeleteProduct(id);
+    } else {
+      // Normal delete with validation
+      deletedProduct = await hardDeleteProduct(id);
+    }
+
+    return res.status(200).json({
+      message: "Product permanently deleted successfully",
+      product: deletedProduct,
+    });
+  } catch (err) {
+    // Handle reference constraint errors
+    if (err.message.includes("Cannot delete product")) {
+      return res.status(400).json({
+        message: err.message,
+        suggestion: "Use soft delete or remove references first",
+      });
+    }
+    next(err);
+  }
+};
+
 module.exports = {
   uploadProductsFromExcel,
   getAllProductsHandler,
@@ -679,4 +899,7 @@ module.exports = {
   createVariantHandler,
   getProductsBySegmentHandler,
   getVariantsOverviewPaginatedHandler,
+  updateProductHandler,
+  softDeleteProductHandler,
+  hardDeleteProductHandler,
 };

@@ -15,7 +15,14 @@ const {
   createVariantHandler,
   getProductsBySegmentHandler,
   getVariantsOverviewPaginatedHandler,
+  updateProductHandler,
+  softDeleteProductHandler,
+  hardDeleteProductHandler,
 } = require("../../controllers/staff/product.controller");
+const {
+  authenticateToken,
+  requireRole,
+} = require("../../middlewares/auth.middleware");
 
 // Configureing multer for excel upload
 const upload = multer({
@@ -84,5 +91,31 @@ router.get("/:id", getProductDetailsByIdHandler);
 // Variant overview (Admin / Staff)
 // GET /api/products/variants/overview
 router.get("/variants/overview", getVariantsOverviewPaginatedHandler);
+
+/**
+ * ADMIN / STAFF
+ * Update product details
+ * PUT: /api/products/:id
+ */
+router.put("/:id", updateProductHandler);
+
+/**
+ * ADMIN / STAFF
+ * Soft delete product (mark all variants as DISCONTINUED)
+ * PATCH: /api/products/:id/soft-delete
+ */
+router.patch("/:id/soft-delete", softDeleteProductHandler);
+
+/**
+ * ADMIN ONLY
+ * Hard delete product (permanent deletion)
+ * DELETE: /api/products/:id
+ */
+router.delete(
+  "/:id",
+  authenticateToken,
+  requireRole("ADMIN"),
+  hardDeleteProductHandler
+);
 
 module.exports = router;
