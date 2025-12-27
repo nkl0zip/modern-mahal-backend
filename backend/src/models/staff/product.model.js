@@ -269,7 +269,8 @@ async function getProductDetailsById(productId) {
           'weight_capacity', v.weight_capacity,
           'usability', v.usability,
           'in_box_content', v.in_box_content,
-          'tags', v.tags
+          'tags', v.tags,
+          'status', v.status
         )
         FROM product_variants v
         WHERE v.product_id = p.id
@@ -330,7 +331,10 @@ async function searchProducts({ name, code }) {
           'colour', (SELECT name FROM colours WHERE id = v.colour_id),
           'finish', (SELECT name FROM finishes WHERE id = v.finish_id)
         ) FROM product_variants v WHERE v.product_id = p.id ORDER BY v.created_at ASC LIMIT 1
-      ) AS primary_variant
+      ) AS primary_variant,
+      (
+        SELECT pi.media_url FROM products_image pi WHERE pi.product_id = p.id AND pi.display_order = 1 LIMIT 1
+      ) AS product_image
     FROM products p
     LEFT JOIN brands b ON p.brand_id = b.id
     ${whereClause}
