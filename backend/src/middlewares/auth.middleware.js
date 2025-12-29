@@ -36,15 +36,18 @@ const authenticateToken = async (req, res, next) => {
 
 // restrict route access by role
 const requireRole = (role) => {
+  // normalize to array
+  const allowedRoles = Array.isArray(role) ? role : [role];
+
   return (req, res, next) => {
     if (!req.user) {
       return res.status(401).json({ message: "Not authenticated" });
     }
 
-    if (req.user.role !== role) {
-      return res
-        .status(403)
-        .json({ message: `Access denied. ${role} role required.` });
+    if (!allowedRoles.includes(req.user.role)) {
+      return res.status(403).json({
+        message: `Access denied. Required role(s): ${allowedRoles.join(", ")}.`,
+      });
     }
 
     next();

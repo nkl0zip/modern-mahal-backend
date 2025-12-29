@@ -20,6 +20,7 @@ const adminIpRoutes = require("./routes/admin/ip.routes");
 const ticketRoutes = require("./routes/staff/ticket.routes");
 const productVariantRoutes = require("./routes/staff/productVariant.routes");
 const segmentRoutes = require("./routes/admin/segment.routes");
+const orderChatRoutes = require("./routes/staff/orderTemplate.routes");
 
 const errorHandler = require("./middlewares/error.middleware");
 
@@ -54,6 +55,7 @@ app.use("/api/admin/ips", adminIpRoutes);
 app.use("/api/tickets", ticketRoutes);
 app.use("/api/products/variant", productVariantRoutes);
 app.use("/api/segment", segmentRoutes);
+app.use("/api/order-templates", orderChatRoutes);
 
 app.use(errorHandler);
 
