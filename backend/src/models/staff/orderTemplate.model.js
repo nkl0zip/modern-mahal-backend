@@ -52,14 +52,71 @@ const getUserTemplates = async (user_id, status = null) => {
   let query = `
     SELECT 
       ot.*,
-      u.name as user_name,
-      s.name as staff_name,
-      (SELECT COUNT(*) FROM order_template_items oti WHERE oti.template_id = ot.id AND oti.status = 'ACTIVE') as item_count,
-      (SELECT COUNT(*) FROM order_template_chats otc WHERE otc.template_id = ot.id AND otc.deleted_at IS NULL) as chat_count
+      u.name AS user_name,
+      s.name AS staff_name,
+
+      /* counts */
+      (
+        SELECT COUNT(*)
+        FROM order_template_items oti
+        WHERE oti.template_id = ot.id
+          AND oti.status = 'ACTIVE'
+      ) AS item_count,
+
+      (
+        SELECT COUNT(*)
+        FROM order_template_chats otc
+        WHERE otc.template_id = ot.id
+          AND otc.deleted_at IS NULL
+      ) AS chat_count,
+
+      /* template items (details) */
+      COALESCE(
+        (
+          SELECT json_agg(
+            json_build_object(
+              'id', oti.id,
+              'template_id', oti.template_id,
+              'product_id', oti.product_id,
+              'variant_id', oti.variant_id,
+              'quantity', oti.quantity,
+              'status', oti.status,
+              'added_at', oti.added_at,
+
+              'product_name', p.name,
+              'product_code', p.product_code,
+              'sub_code', pv.sub_code,
+              'current_mrp', pv.mrp,
+              'colour_name', cl.name,
+              'finish_name', f.name,
+              'brand_name', b.name,
+              'product_image', pi.media_url
+            )
+            ORDER BY oti.added_at DESC
+          )
+          FROM order_template_items oti
+          JOIN products p ON oti.product_id = p.id
+          LEFT JOIN product_variants pv ON oti.variant_id = pv.id
+          LEFT JOIN colours cl ON pv.colour_id = cl.id
+          LEFT JOIN finishes f ON pv.finish_id = f.id
+          LEFT JOIN brands b ON p.brand_id = b.id
+          LEFT JOIN LATERAL (
+            SELECT media_url
+            FROM products_image
+            WHERE (product_id = p.id OR variant_id = pv.id)
+              AND display_order = 1
+            LIMIT 1
+          ) pi ON true
+          WHERE oti.template_id = ot.id
+        ),
+        '[]'::json
+      ) AS template_items
+
     FROM order_templates ot
     LEFT JOIN users u ON ot.user_id = u.id
     LEFT JOIN users s ON ot.staff_id = s.id
-    WHERE ot.user_id = $1 AND ot.is_deleted = false
+    WHERE ot.user_id = $1
+      AND ot.is_deleted = false
   `;
 
   const params = [user_id];
