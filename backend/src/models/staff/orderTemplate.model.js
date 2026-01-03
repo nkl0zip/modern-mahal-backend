@@ -8,14 +8,15 @@ const createOrderTemplate = async ({
   staff_id = null,
   title = null,
   description = null,
+  created_by = "USER",
 }) => {
   const { rows } = await pool.query(
     `
-    INSERT INTO order_templates (user_id, staff_id, title, description)
-    VALUES ($1, $2, $3, $4)
+    INSERT INTO order_templates (user_id, staff_id, title, description, created_by)
+    VALUES ($1, $2, $3, $4, $5)
     RETURNING *;
     `,
-    [user_id, staff_id, title, description]
+    [user_id, staff_id, title, description, created_by]
   );
   return rows[0];
 };

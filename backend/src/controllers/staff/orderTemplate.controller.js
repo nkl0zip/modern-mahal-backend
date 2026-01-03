@@ -83,6 +83,7 @@ const createOrderTemplateHandler = async (req, res, next) => {
       staff_id: staff_id, // Always null initially
       title: title || null,
       description: description || null,
+      created_by: user_role === "USER" ? "USER" : "STAFF",
     });
 
     return res.status(201).json({
