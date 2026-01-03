@@ -386,12 +386,12 @@ const assignStaffHandler = async (req, res, next) => {
 
     const template = await checkTemplateAccess(template_id, user_id, user_role);
     // For staff users, check if they are assigned to this template
-    if (["STAFF"].includes(user_role) && template.staff_id !== user_id) {
+    /*if (["STAFF"].includes(user_role) && template.staff_id !== user_id) {
       return res.status(403).json({
         message:
           "Staff is not assigned to this template. Please get assigned first.",
       });
-    }
+    }*/
 
     const updatedTemplate = await assignStaffToTemplate(template_id, staff_id);
 
