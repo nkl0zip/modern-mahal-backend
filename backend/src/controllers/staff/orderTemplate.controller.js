@@ -392,11 +392,6 @@ const assignStaffHandler = async (req, res, next) => {
           "Staff is not assigned to this template. Please get assigned first.",
       });
     }
-    if (!template) {
-      return res
-        .status(404)
-        .json({ message: "Template not found or access denied" });
-    }
 
     const updatedTemplate = await assignStaffToTemplate(template_id, staff_id);
 
