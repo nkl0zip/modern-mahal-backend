@@ -12,6 +12,8 @@ const {
   checkTemplateAccess,
 } = require("../../models/staff/orderTemplate.model");
 
+const { getSocketManager } = require("../../config/socket");
+
 const pool = require("../../config/db");
 
 /**
@@ -91,6 +93,8 @@ const sendChatMessageHandler = async (req, res, next) => {
       });
     }
 
+    const socketManager = getSocketManager();
+
     const chatMessage = await addChatMessage({
       template_id,
       sender_id: user_id,
@@ -138,9 +142,17 @@ const sendChatMessageHandler = async (req, res, next) => {
       [chatMessage.id]
     );
 
+    const fullMessage = rows[0];
+
+    // Emit socket event for real-time update
+    socketManager.sendToTemplate(template_id, "new-message", {
+      message: fullMessage,
+      template_id,
+    });
+
     return res.status(201).json({
       message: "Message sent successfully",
-      chat: rows[0],
+      chat: fullMessage,
     });
   } catch (err) {
     next(err);
@@ -167,6 +179,19 @@ const deleteChatMessageHandler = async (req, res, next) => {
           "Chat message not found or you don't have permission to delete it",
       });
     }
+
+    const socketManager = getSocketManager();
+
+    socketManager.sendToTemplate(
+      deletedMessage.template_id,
+      "message-deleted",
+      {
+        message_id: chat_id,
+        template_id: deletedMessage.template_id,
+        deleted_by: user_id,
+        timestamp: new Date().toISOString(),
+      }
+    );
 
     return res.status(200).json({
       message: "Chat message deleted successfully",
@@ -233,6 +258,17 @@ const markAsReadHandler = async (req, res, next) => {
     }
 
     const updatedCount = await markMessagesAsRead(template_id, user_id);
+
+    // Emit socket event
+    const { getSocketManager } = require("../../config/socket");
+    const socketManager = getSocketManager();
+
+    socketManager.sendToTemplate(template_id, "messages-read", {
+      template_id,
+      reader_id: user_id,
+      count: updatedCount,
+      message_ids: "all",
+    });
 
     return res.status(200).json({
       message: "Messages marked as read successfully",

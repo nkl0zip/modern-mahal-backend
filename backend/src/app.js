@@ -3,6 +3,9 @@ const cors = require("cors");
 const bodyParser = require("body-parser");
 require("dotenv").config();
 require("./jobs/cleanupTokens.job");
+const http = require("http");
+const { initializeSocket } = require("./config/socket");
+const fs = require("fs");
 
 const authRoutes = require("./routes/auth.routes");
 const profileRoutes = require("./routes/profile.routes");

@@ -154,6 +154,36 @@ const getAttachmentById = async (attachment_id) => {
   return rows[0] || null;
 };
 
+/**
+ * Get message by ID with details
+ */
+const getMessageById = async (message_id) => {
+  const { rows } = await pool.query(
+    `
+    SELECT 
+      otc.*,
+      u.name as sender_name,
+      u.role as sender_role,
+      ARRAY(
+        SELECT jsonb_build_object(
+          'id', ota.id,
+          'file_url', ota.file_url,
+          'file_name', ota.file_name,
+          'mime_type', ota.mime_type
+        )
+        FROM order_template_attachments ota
+        WHERE ota.chat_id = otc.id
+      ) as attachments
+    FROM order_template_chats otc
+    JOIN users u ON otc.sender_id = u.id
+    WHERE otc.id = $1
+    LIMIT 1;
+    `,
+    [message_id]
+  );
+  return rows[0] || null;
+};
+
 module.exports = {
   addChatMessage,
   getTemplateChats,
@@ -162,4 +192,5 @@ module.exports = {
   getUnreadMessageCount,
   addChatAttachment,
   getAttachmentById,
+  getMessageById,
 };
