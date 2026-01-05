@@ -117,4 +117,12 @@ router.get(
   (req, res) => TicketController.getStaffStats(req, res)
 );
 
+// getDetailsById - Allowed by Both Admin & staff
+router.get(
+  "/details/:id",
+  authenticateToken,
+  requireRole(["STAFF", "ADMIN"]),
+  (req, res) => TicketController.getTicketDetailsById(req, res)
+);
+
 module.exports = router;

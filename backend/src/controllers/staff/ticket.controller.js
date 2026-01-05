@@ -77,6 +77,45 @@ const TicketController = {
     }
   },
 
+  // Get Full TicektDetails by ID
+  async getTicketDetailsById(req, res) {
+    try {
+      const user = req.user;
+      if (user.role !== "ADMIN" && user.role !== "STAFF") {
+        return res.status(403).json({ message: "Access Denied" });
+      }
+
+      const ticketId = req.params.id;
+      if (!ticketId) {
+        return res.status(400).json({ message: "Ticket ID is required" });
+      }
+
+      // Get ticket details with user info
+      const ticketDetails = await TicketModel.getTicketDetailsById(ticketId);
+      if (!ticketDetails) {
+        return res.status(404).json({ message: "Ticket not found" });
+      }
+
+      // Get attachments
+      const attachments = await TicketModel.getTicketAttachments(ticketId);
+
+      // Get activities
+      const activities = await TicketModel.getTicketActivities(ticketId);
+
+      return res.status(200).json({
+        ticket: ticketDetails,
+        attachments,
+        activities,
+      });
+    } catch (err) {
+      console.error("getTicketDetailsById error: ", err);
+      return res.status(500).json({
+        message: "Internal server error",
+        error: err.message,
+      });
+    }
+  },
+
   // List user's tickets
   async listUserTickets(req, res) {
     try {

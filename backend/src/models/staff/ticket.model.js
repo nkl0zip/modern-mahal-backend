@@ -185,31 +185,41 @@ const TicketModel = {
 
   async listAllTickets({ filter = {}, limit = 50, offset = 0 } = {}) {
     // Basic filter support (status, assigned_staff_id, type)
-    const conditions = ["is_deleted = false"];
+    const conditions = ["t.is_deleted = false"];
     const params = [];
     let idx = 1;
 
     if (filter.status) {
-      conditions.push(`status = $${idx++}`);
+      conditions.push(`t.status = $${idx++}`);
       params.push(filter.status);
     }
     if (filter.assigned_staff_id) {
-      conditions.push(`assigned_staff_id = $${idx++}`);
+      conditions.push(`t.assigned_staff_id = $${idx++}`);
       params.push(filter.assigned_staff_id);
     }
     if (filter.type) {
-      conditions.push(`type = $${idx++}`);
+      conditions.push(`t.type = $${idx++}`);
       params.push(filter.type);
     }
     if (filter.search) {
-      conditions.push(`(title ILIKE $${idx} OR message ILIKE $${idx})`);
+      conditions.push(`(t.title ILIKE $${idx} OR t.message ILIKE $${idx})`);
       params.push(`%${filter.search}%`);
       idx++;
     }
 
     const where = conditions.length ? `WHERE ${conditions.join(" AND ")}` : "";
     const sql = `
-      SELECT * FROM tickets
+      SELECT
+      t.id,
+      t.title,
+      t.type,
+      t.status,
+      t.priority,
+      t.created_at,
+      t.user_id,
+      up.avatar_url
+      FROM tickets t
+      LEFT JOIN user_profiles up ON t.user_id = up.user_id
       ${where}
       ORDER BY created_at DESC
       LIMIT $${idx++} OFFSET $${idx++};
@@ -217,6 +227,35 @@ const TicketModel = {
     params.push(limit, offset);
     const { rows } = await pool.query(sql, params);
     return rows;
+  },
+
+  async getTicketDetailsById(ticket_id) {
+    const sql = `
+      SELECT 
+      t.id,
+      t.user_id,
+      u.name as user_name,
+      u.phone as phone_number,
+      u.email as email_address,
+      up.working_email as work_email_address,
+      t.title,
+      t.type,
+      t.status,
+      t.priority,
+      t.created_at,
+      t.updated_at,
+      t.message,
+      t.assigned_staff_id,
+      staff.name as staff_name
+      FROM tickets t
+      LEFT JOIN users u ON t.user_id = u.id
+      LEFT JOIN user_profiles up ON t.user_id = up.user_id
+      LEFT JOIN users staff ON t.assigned_staff_id = staff.id
+      WHERE t.id = $1 AND t.is_deleted = false;
+    `;
+
+    const { rows } = await pool.query(sql, [ticket_id]);
+    return rows[0];
   },
 
   async getTicketActivities(ticket_id) {

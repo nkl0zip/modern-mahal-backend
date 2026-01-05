@@ -13,14 +13,6 @@ const socketManager = initializeSocket(server);
 server.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
   console.log(`Socket.io initialized: ${socketManager ? "YES" : "NO"}`);
-
-  // Log number of connected sockets (for debugging)
-  setInterval(() => {
-    if (socketManager) {
-      const connectedSockets = socketManager.getConnectedSockets();
-      console.log(`Active sockets: ${connectedSockets.length}`);
-    }
-  }, 60000); // Log every minute
 });
 
 // Handle graceful shutdown
