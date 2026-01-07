@@ -646,6 +646,13 @@ const getProductsBySegment = async ({
         p.name,
         p.product_code,
         (
+          SELECT v.id
+          FROM product_variants v
+          WHERE v.product_id = p.id
+          ORDER BY v.created_at ASC
+          LIMIT 1
+        ) AS variant_id,
+        (
           SELECT v.mrp
           FROM product_variants v
           WHERE v.product_id = p.id
@@ -673,6 +680,7 @@ const getProductsBySegment = async ({
       fp.name AS product_name,
       fp.product_code,
       fp.price_per_unit,
+      fp.variant_id,
       b.name AS brand_name,
       fp.product_image,
       cr.total_count
@@ -690,6 +698,7 @@ const getProductsBySegment = async ({
   return {
     products: rows.map((r) => ({
       product_id: r.product_id,
+      variant_id: r.variant_id,
       product_name: r.product_name,
       product_code: r.product_code,
       price_per_unit: r.price_per_unit,
