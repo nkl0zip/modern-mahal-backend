@@ -118,6 +118,7 @@ router.get(
 );
 
 // getDetailsById - Allowed by Both Admin & staff
+// GET: /api/tickets/details/:id
 router.get(
   "/details/:id",
   authenticateToken,

@@ -217,7 +217,8 @@ const TicketModel = {
       t.priority,
       t.created_at,
       t.user_id,
-      up.avatar_url
+      up.avatar_url,
+      COUNT(*) OVER() AS total_count
       FROM tickets t
       LEFT JOIN user_profiles up ON t.user_id = up.user_id
       ${where}
@@ -226,7 +227,10 @@ const TicketModel = {
     `;
     params.push(limit, offset);
     const { rows } = await pool.query(sql, params);
-    return rows;
+    return {
+      total: rows.length ? Number(rows[0].total_count) : 0,
+      tickets: rows.map(({ total_count, ...ticket }) => ticket),
+    };
   },
 
   async getTicketDetailsById(ticket_id) {
