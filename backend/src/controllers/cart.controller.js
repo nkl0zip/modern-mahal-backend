@@ -11,7 +11,7 @@ const {
 /* INIT CART */
 const initCartHandler = async (req, res, next) => {
   try {
-    const { user_id } = req.body;
+    const user_id = req.user.id;
     if (!user_id) return res.status(400).json({ message: "user_id required" });
 
     const cart = await findOrCreateCartByUser(user_id);
@@ -24,7 +24,7 @@ const initCartHandler = async (req, res, next) => {
 /* GET CART */
 const getCartHandler = async (req, res, next) => {
   try {
-    const { user_id } = req.params;
+    const user_id = req.user.id;
     const cart = await getCartByUser(user_id);
     if (!cart) return res.status(404).json({ message: "Cart not found" });
 
@@ -43,7 +43,8 @@ const getCartHandler = async (req, res, next) => {
 /* ADD TO CART */
 const addToCartHandler = async (req, res, next) => {
   try {
-    const { user_id, variant_id, quantity } = req.body;
+    const user_id = req.user.id;
+    const { variant_id, quantity } = req.body;
 
     if (!user_id || !variant_id || !quantity)
       return res.status(400).json({ message: "Missing required fields" });
@@ -95,7 +96,7 @@ const removeCartItemHandler = async (req, res, next) => {
 /* CLEAR CART */
 const clearCartHandler = async (req, res, next) => {
   try {
-    const cart = await getCartByUser(req.params.user_id);
+    const cart = await getCartByUser(req.user.id);
     if (!cart) return res.status(404).json({ message: "Cart not found" });
 
     await clearCart(cart.id);
