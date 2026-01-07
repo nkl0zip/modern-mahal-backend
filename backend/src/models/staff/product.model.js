@@ -420,6 +420,9 @@ const getProductListBySearch = async ({ name, page = 1, limit = 20 }) => {
         p.name,
         p.product_code,
         p.brand_id,
+        (
+          SELECT v.id FROM product_variants v WHERE v.product_id = p.id ORDER BY v.created_at ASC LIMIT 1
+        ) AS variant_id,
         GREATEST(
           similarity(p.name, $1),
           similarity(p.description, $1),
@@ -442,6 +445,7 @@ const getProductListBySearch = async ({ name, page = 1, limit = 20 }) => {
     )
     SELECT
       f.id AS product_id,
+      f.variant_id AS variant_id,
       f.name AS product_name,
       f.product_code,
       b.name AS brand_name,
@@ -465,6 +469,7 @@ const getProductListBySearch = async ({ name, page = 1, limit = 20 }) => {
   return {
     products: rows.map((row) => ({
       product_id: row.product_id,
+      variant_id: row.variant_id,
       product_name: row.product_name,
       product_code: row.product_code,
       price_per_unit: row.price_per_unit,
@@ -490,6 +495,9 @@ const getProductOverviewPaginated = async ({ page = 1, limit = 20 }) => {
       p.name AS product_name,
       p.product_code,
       (
+        SELECT v.id FROM product_variants v WHERE v.product_id = p.id ORDER BY v.created_at ASC LIMIT 1
+      ) AS variant_id,
+      (
         SELECT v.mrp FROM product_variants v WHERE v.product_id = p.id ORDER BY v.created_at ASC LIMIT 1
       ) AS price_per_unit,
       b.name AS brand_name,
@@ -509,6 +517,7 @@ const getProductOverviewPaginated = async ({ page = 1, limit = 20 }) => {
   return {
     products: rows.map((row) => ({
       product_id: row.product_id,
+      variant_id: row.variant_id,
       product_name: row.product_name,
       product_code: row.product_code,
       price_per_unit: row.price_per_unit,
