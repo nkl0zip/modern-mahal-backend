@@ -8,11 +8,11 @@ const getUserWishlist = async (userId) => {
       w.added_at,
       p.name AS product_name, 
       p.product_code, 
-      p.price_per_unit,
-      p.stock_quantity,
+      v.mrp,
       pi.media_url AS product_image
     FROM wishlists w
     JOIN products p ON w.product_id = p.id
+    JOIN product_variants v ON w.product_id = v.product_id
     LEFT JOIN LATERAL (
       SELECT media_url
       FROM products_image
