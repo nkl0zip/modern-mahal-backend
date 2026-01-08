@@ -138,6 +138,17 @@ const TicketModel = {
     return rows[0];
   },
 
+  async checkIfStaffAssigned(ticket_id, staff_id) {
+    const sql = `
+    SELECT 1
+    FROM tickets
+    WHERE id = $1
+      AND assigned_staff_id = $2;
+  `;
+    const { rowCount } = await pool.query(sql, [ticket_id, staff_id]);
+    return rowCount > 0;
+  },
+
   async updateTicketStatus(ticket_id, status, closed = false) {
     const sql = `
       UPDATE tickets

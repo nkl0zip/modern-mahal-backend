@@ -313,6 +313,20 @@ const TicketController = {
       if (!allowed.includes(status))
         return res.status(400).json({ message: "Invalid status" });
 
+      // If STAFF, ensure they are assigned to the ticket
+      if (user.role === "STAFF") {
+        const isAssigned = await TicketModel.checkIfStaffAssigned(
+          ticketId,
+          user.id
+        );
+
+        if (!isAssigned) {
+          return res.status(403).json({
+            message: "You are not assigned to this ticket",
+          });
+        }
+      }
+
       await TicketService.updateTicketStatus({
         ticket_id: ticketId,
         status,
