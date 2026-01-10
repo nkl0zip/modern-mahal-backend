@@ -196,15 +196,19 @@ async function getAllProductDetails() {
         SELECT jsonb_build_object(
           'id', v.id,
           'sub_code', v.sub_code,
-          'colour', (SELECT name FROM colours WHERE id = v.colour_id),
-          'finish', (SELECT name FROM finishes WHERE id = v.finish_id),
           'mrp', v.mrp,
           'alloy', v.alloy,
-          'weight_capacity', v.weight_capacity,
           'usability', v.usability,
           'in_box_content', v.in_box_content,
           'tags', v.tags,
-          'status', v.status
+          'status', v.status,
+          'attributes', ARRAY[
+            jsonb_build_object(
+              'colour', (SELECT name FROM colours WHERE id = v.colour_id),
+              'finish', (SELECT name FROM finishes WHERE id = v.finish_id),
+              'weight_capacity', v.weight_capacity
+            )
+          ]
         )
         FROM product_variants v
         WHERE v.product_id = p.id
@@ -223,12 +227,15 @@ async function getAllProductDetails() {
         ORDER BY pi.display_order ASC
       ) AS images,
       ARRAY(
-        SELECT h.text FROM highlights h WHERE h.product_id = p.id
+        SELECT h.text
+        FROM highlights h
+        WHERE h.product_id = p.id
       ) AS highlights
     FROM products p
     LEFT JOIN brands b ON p.brand_id = b.id
     ORDER BY p.created_at DESC;
   `;
+
   const result = await pool.query(query);
   return result.rows;
 }
@@ -262,15 +269,19 @@ async function getProductDetailsById(productId) {
         SELECT jsonb_build_object(
           'id', v.id,
           'sub_code', v.sub_code,
-          'colour', (SELECT name FROM colours WHERE id = v.colour_id),
-          'finish', (SELECT name FROM finishes WHERE id = v.finish_id),
           'mrp', v.mrp,
           'alloy', v.alloy,
-          'weight_capacity', v.weight_capacity,
           'usability', v.usability,
           'in_box_content', v.in_box_content,
           'tags', v.tags,
-          'status', v.status
+          'status', v.status,
+          'attributes', ARRAY[
+            jsonb_build_object(
+              'colour', (SELECT name FROM colours WHERE id = v.colour_id),
+              'finish', (SELECT name FROM finishes WHERE id = v.finish_id),
+              'weight_capacity', v.weight_capacity
+            )
+          ]
         )
         FROM product_variants v
         WHERE v.product_id = p.id
@@ -289,13 +300,16 @@ async function getProductDetailsById(productId) {
         ORDER BY pi.display_order ASC
       ) AS images,
       ARRAY(
-        SELECT h.text FROM highlights h WHERE h.product_id = p.id
+        SELECT h.text
+        FROM highlights h
+        WHERE h.product_id = p.id
       ) AS highlights
     FROM products p
     LEFT JOIN brands b ON p.brand_id = b.id
     WHERE p.id = $1
     LIMIT 1;
   `;
+
   const result = await pool.query(query, [productId]);
   return result.rows.length ? result.rows[0] : null;
 }
