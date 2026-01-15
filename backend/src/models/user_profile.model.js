@@ -62,4 +62,85 @@ const upsertUserProfile = async (
   return result.rows[0];
 };
 
-module.exports = { getUserProfile, upsertUserProfile, createUserProfile };
+/**
+ * Get selected categories for a user
+ */
+const getUserCategories = async (userId) => {
+  const query = `
+    SELECT c.id, c.name
+    FROM user_category_preferences ucp
+    JOIN categories c ON c.id = ucp.category_id
+    WHERE ucp.user_id = $1
+    ORDER BY ucp.created_at ASC;
+  `;
+  const { rows } = await pool.query(query, [userId]);
+  return rows;
+};
+
+/**
+ * Assign categories to user (initial assignment only)
+ */
+const assignUserCategories = async (userId, categoryIds) => {
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+
+    for (const categoryId of categoryIds) {
+      await client.query(
+        `
+        INSERT INTO user_category_preferences (user_id, category_id)
+        VALUES ($1, $2);
+        `,
+        [userId, categoryId]
+      );
+    }
+
+    await client.query("COMMIT");
+  } catch (err) {
+    await client.query("ROLLBACK");
+    throw err;
+  } finally {
+    client.release();
+  }
+};
+
+/**
+ * Update (replace) user categories
+ */
+const updateUserCategories = async (userId, categoryIds) => {
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+
+    await client.query(
+      `DELETE FROM user_category_preferences WHERE user_id = $1`,
+      [userId]
+    );
+
+    for (const categoryId of categoryIds) {
+      await client.query(
+        `
+        INSERT INTO user_category_preferences (user_id, category_id)
+        VALUES ($1, $2);
+        `,
+        [userId, categoryId]
+      );
+    }
+
+    await client.query("COMMIT");
+  } catch (err) {
+    await client.query("ROLLBACK");
+    throw err;
+  } finally {
+    client.release();
+  }
+};
+
+module.exports = {
+  getUserProfile,
+  upsertUserProfile,
+  createUserProfile,
+  getUserCategories,
+  assignUserCategories,
+  updateUserCategories,
+};
