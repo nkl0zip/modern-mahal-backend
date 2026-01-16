@@ -497,15 +497,22 @@ const getBrandsProductListHandler = async (req, res, next) => {
 const getProductListBySearchHandler = async (req, res, next) => {
   try {
     const { name, page = 1 } = req.query;
-    if (!name)
+
+    if (!name) {
       return res
         .status(400)
         .json({ message: "Search term 'name' is required." });
+    }
+
     const pageNum = parseInt(page, 10) || 1;
+    const user = req.user || null;
+
     const { products, total_count } = await getProductListBySearch({
       name,
       page: pageNum,
+      user,
     });
+
     return res.status(200).json({
       message: "Products fetched successfully.",
       page: pageNum,

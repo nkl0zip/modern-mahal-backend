@@ -70,7 +70,7 @@ router.get("/brands/:id", getBrandsProductListHandler);
 // Fuzzy Search GET /api/products/list?name=xyz&page=1&limit=20
 // Fuzzy Search GET /api/products/list?product_id=uuid
 // Allowed for all roles
-router.get("/list", getProductListBySearchHandler);
+router.get("/list", optionalAuthenticateToken, getProductListBySearchHandler);
 
 // For creating a new variant of an existing product
 // Allowed only for ADMIN & STAFF

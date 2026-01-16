@@ -422,10 +422,40 @@ const getBrandsProductList = async ({ brand_id, page = 1, limit = 20 }) => {
  * Fuzzy search / paginated list - still searches the product master but ranks by product name/description/brand/category
  * Returns primary variant price and image as overview fields to preserve old API contract.
  */
-const getProductListBySearch = async ({ name, page = 1, limit = 20 }) => {
+const getProductListBySearch = async ({
+  name,
+  page = 1,
+  limit = 20,
+  user = null,
+}) => {
   if (!name) return { products: [], total_count: 0 };
+
   const offset = (page - 1) * limit;
   const searchTerm = name;
+
+  const values = [searchTerm, limit, offset];
+  let categoryFilter = "";
+
+  /**
+   * Apply category restriction ONLY for USER
+   */
+  if (user && user.role === "USER") {
+    categoryFilter = `
+      AND p.id IN (
+        SELECT pc.product_id
+        FROM product_category pc
+        JOIN categories c ON c.id = pc.category_id
+        WHERE
+          c.is_global = TRUE
+          OR pc.category_id IN (
+            SELECT category_id
+            FROM user_category_preferences
+            WHERE user_id = $4
+          )
+      )
+    `;
+    values.push(user.id);
+  }
 
   const fuzzyQuery = `
     WITH ProductScores AS (
@@ -435,7 +465,11 @@ const getProductListBySearch = async ({ name, page = 1, limit = 20 }) => {
         p.product_code,
         p.brand_id,
         (
-          SELECT v.id FROM product_variants v WHERE v.product_id = p.id ORDER BY v.created_at ASC LIMIT 1
+          SELECT v.id
+          FROM product_variants v
+          WHERE v.product_id = p.id
+          ORDER BY v.created_at ASC
+          LIMIT 1
         ) AS variant_id,
         GREATEST(
           similarity(p.name, $1),
@@ -450,6 +484,8 @@ const getProductListBySearch = async ({ name, page = 1, limit = 20 }) => {
         ) AS score
       FROM products p
       LEFT JOIN brands b ON p.brand_id = b.id
+      WHERE 1=1
+      ${categoryFilter}
     ),
     Filtered AS (
       SELECT * FROM ProductScores WHERE score > 0.1
@@ -459,15 +495,23 @@ const getProductListBySearch = async ({ name, page = 1, limit = 20 }) => {
     )
     SELECT
       f.id AS product_id,
-      f.variant_id AS variant_id,
+      f.variant_id,
       f.name AS product_name,
       f.product_code,
       b.name AS brand_name,
       (
-        SELECT v.mrp FROM product_variants v WHERE v.product_id = f.id ORDER BY v.created_at ASC LIMIT 1
+        SELECT v.mrp
+        FROM product_variants v
+        WHERE v.product_id = f.id
+        ORDER BY v.created_at ASC
+        LIMIT 1
       ) AS price_per_unit,
       (
-        SELECT pi.media_url FROM products_image pi WHERE pi.product_id = f.id AND pi.display_order = 1 LIMIT 1
+        SELECT pi.media_url
+        FROM products_image pi
+        WHERE pi.product_id = f.id
+          AND pi.display_order = 1
+        LIMIT 1
       ) AS product_image,
       f.score,
       cr.total_count
@@ -477,7 +521,9 @@ const getProductListBySearch = async ({ name, page = 1, limit = 20 }) => {
     ORDER BY f.score DESC
     LIMIT $2 OFFSET $3;
   `;
-  const { rows } = await pool.query(fuzzyQuery, [searchTerm, limit, offset]);
+
+  const { rows } = await pool.query(fuzzyQuery, values);
+
   if (!rows.length) return { products: [], total_count: 0 };
 
   return {
