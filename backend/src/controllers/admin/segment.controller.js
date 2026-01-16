@@ -5,6 +5,7 @@ const {
   deleteSegmentById,
   findCategoryIdsByNames,
   getSegmentsByCategory,
+  getUserSegments,
 } = require("../../models/admin/segment.model");
 
 /**
@@ -122,9 +123,36 @@ const getSegmentsByCategoryHandler = async (req, res, next) => {
   }
 };
 
+/**
+ * USER: Get segments based on selected + global categories
+ */
+const getUserSegmentsHandler = async (req, res, next) => {
+  try {
+    const user = req.user;
+
+    if (!user || user.role !== "USER") {
+      return res.status(403).json({
+        message: "Only users can access segment listing.",
+      });
+    }
+
+    const segments = await getUserSegments(user.id);
+
+    return res.status(200).json({
+      success: true,
+      count: segments.length,
+      segments,
+    });
+  } catch (error) {
+    console.error("Error fetching user segments:", error);
+    next(error);
+  }
+};
+
 module.exports = {
   listSegmentsHandler,
   createSegmentHandler,
   deleteSegmentHandler,
   getSegmentsByCategoryHandler,
+  getUserSegmentsHandler,
 };

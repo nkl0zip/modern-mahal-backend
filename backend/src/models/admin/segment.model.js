@@ -130,6 +130,35 @@ const getSegmentsByCategory = async ({ category_id, category_name }) => {
   return rows;
 };
 
+/**
+ * Get segments for a USER
+ * - Segments under user's selected categories
+ * - Segments under global categories
+ */
+const getUserSegments = async (userId) => {
+  const query = `
+    SELECT DISTINCT
+      s.id AS segment_id,
+      s.name AS segment_name,
+      s.created_at
+    FROM segments s
+    JOIN category_segments cs
+      ON cs.segment_id = s.id
+    JOIN categories c
+      ON c.id = cs.category_id
+    LEFT JOIN user_category_preferences ucp
+      ON ucp.category_id = c.id
+     AND ucp.user_id = $1
+    WHERE
+      c.is_global = TRUE
+      OR ucp.user_id IS NOT NULL
+    ORDER BY s.name ASC;
+  `;
+
+  const { rows } = await pool.query(query, [userId]);
+  return rows;
+};
+
 module.exports = {
   getAllSegmentsWithCategories,
   createSegment,
@@ -137,4 +166,5 @@ module.exports = {
   deleteSegmentById,
   findCategoryIdsByNames,
   getSegmentsByCategory,
+  getUserSegments,
 };
