@@ -22,6 +22,7 @@ const {
 const {
   authenticateToken,
   requireRole,
+  optionalAuthenticateToken,
 } = require("../../middlewares/auth.middleware");
 
 // Configureing multer for excel upload
@@ -78,7 +79,11 @@ router.post("/:productId/variants", createVariantHandler);
 
 // Allowed for all roles
 // GET /api/products/overview?page=1&limit=20
-router.get("/overview", getProductOverviewPaginatedHandler);
+router.get(
+  "/overview",
+  optionalAuthenticateToken,
+  getProductOverviewPaginatedHandler
+);
 
 // Allowed for all roles
 // GET /api/products/segment/list?id=uuid OR ?name=Patch-Fittings

@@ -526,9 +526,15 @@ const getProductOverviewPaginatedHandler = async (req, res, next) => {
   try {
     const { page = 1 } = req.query;
     const pageNum = parseInt(page, 10) || 1;
+
+    const user = req.user || null; // null if not logged in
+    console.log("USER IN PRODUCT LIST:", req.user);
+
     const { products, total_count } = await getProductOverviewPaginated({
       page: pageNum,
+      user,
     });
+
     return res.status(200).json({
       message: "Product overview fetched.",
       page: pageNum,

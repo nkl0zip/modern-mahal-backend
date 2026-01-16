@@ -498,35 +498,87 @@ const getProductListBySearch = async ({ name, page = 1, limit = 20 }) => {
 /**
  * Overview paginated listing: returns product masters with primary variant price and image
  */
-const getProductOverviewPaginated = async ({ page = 1, limit = 20 }) => {
+const getProductOverviewPaginated = async ({
+  page = 1,
+  limit = 20,
+  user = null,
+}) => {
   const offset = (page - 1) * limit;
+
+  const values = [limit, offset];
+  let whereClause = "";
+
+  /**
+   * Apply restriction ONLY for logged-in USER
+   */
+  if (user && user.role === "USER") {
+    whereClause = `
+      WHERE EXISTS (
+        SELECT 1
+        FROM product_category pc
+        JOIN categories c ON c.id = pc.category_id
+        LEFT JOIN user_category_preferences ucp
+          ON ucp.category_id = c.id
+         AND ucp.user_id = $3
+        WHERE pc.product_id = p.id
+          AND (
+            c.is_global = TRUE
+            OR ucp.user_id IS NOT NULL
+          )
+      )
+    `;
+    values.push(user.id);
+  }
+
   const query = `
-    WITH CountResult AS (
-      SELECT COUNT(*) AS total_count FROM products
+    WITH FilteredProducts AS (
+      SELECT p.id
+      FROM products p
+      ${whereClause}
+    ),
+    CountResult AS (
+      SELECT COUNT(*) AS total_count FROM FilteredProducts
     )
     SELECT
       p.id AS product_id,
       p.name AS product_name,
       p.product_code,
       (
-        SELECT v.id FROM product_variants v WHERE v.product_id = p.id ORDER BY v.created_at ASC LIMIT 1
+        SELECT v.id
+        FROM product_variants v
+        WHERE v.product_id = p.id
+        ORDER BY v.created_at ASC
+        LIMIT 1
       ) AS variant_id,
       (
-        SELECT v.mrp FROM product_variants v WHERE v.product_id = p.id ORDER BY v.created_at ASC LIMIT 1
+        SELECT v.mrp
+        FROM product_variants v
+        WHERE v.product_id = p.id
+        ORDER BY v.created_at ASC
+        LIMIT 1
       ) AS price_per_unit,
       b.name AS brand_name,
       (
-        SELECT pi.media_url FROM products_image pi WHERE pi.product_id = p.id AND pi.display_order = 1 LIMIT 1
+        SELECT pi.media_url
+        FROM products_image pi
+        WHERE pi.product_id = p.id
+          AND pi.display_order = 1
+        LIMIT 1
       ) AS product_image,
       cr.total_count
     FROM products p
+    JOIN FilteredProducts fp ON fp.id = p.id
     LEFT JOIN brands b ON p.brand_id = b.id
     CROSS JOIN CountResult cr
     ORDER BY p.created_at DESC
     LIMIT $1 OFFSET $2;
   `;
-  const { rows } = await pool.query(query, [limit, offset]);
-  if (!rows.length) return { products: [], total_count: 0 };
+
+  const { rows } = await pool.query(query, values);
+
+  if (!rows.length) {
+    return { products: [], total_count: 0 };
+  }
 
   return {
     products: rows.map((row) => ({
