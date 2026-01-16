@@ -460,13 +460,19 @@ const getBrandsProductListHandler = async (req, res, next) => {
   try {
     const { id } = req.params;
     const { page = 1 } = req.query;
-    if (!id) return res.status(400).json({ message: "Brand ID is required" });
+
+    if (!id) {
+      return res.status(400).json({ message: "Brand ID is required" });
+    }
+
     const pageNum = parseInt(page, 10) || 1;
+    const user = req.user || null;
 
     const { products, total_count, brand_name } = await getBrandsProductList({
       brand_id: id,
       page: pageNum,
       limit: 20,
+      user,
     });
 
     if (!products || products.length === 0) {

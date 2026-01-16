@@ -360,14 +360,47 @@ async function searchProducts({ name, code }) {
 
 /**
  * Brand product list (overview) - returns product + primary variant mrp and image
+ * Categorised Product Listing By Brands for Logged In users
  */
-const getBrandsProductList = async ({ brand_id, page = 1, limit = 20 }) => {
+const getBrandsProductList = async ({
+  brand_id,
+  page = 1,
+  limit = 20,
+  user = null,
+}) => {
   if (!brand_id) return { products: [], total_count: 0, brand_name: null };
+
   const offset = (page - 1) * limit;
+  const values = [brand_id, limit, offset];
+  let categoryFilter = "";
+
+  /**
+   * Apply category restriction ONLY for USER
+   */
+  if (user && user.role === "USER") {
+    categoryFilter = `
+      AND p.id IN (
+        SELECT pc.product_id
+        FROM product_category pc
+        JOIN categories c ON c.id = pc.category_id
+        WHERE
+          c.is_global = TRUE
+          OR pc.category_id IN (
+            SELECT category_id
+            FROM user_category_preferences
+            WHERE user_id = $4
+          )
+      )
+    `;
+    values.push(user.id);
+  }
 
   const query = `
     WITH BrandInfo AS (
-      SELECT name AS brand_name FROM brands WHERE id = $1 LIMIT 1
+      SELECT name AS brand_name
+      FROM brands
+      WHERE id = $1
+      LIMIT 1
     ),
     FilteredProducts AS (
       SELECT
@@ -375,15 +408,28 @@ const getBrandsProductList = async ({ brand_id, page = 1, limit = 20 }) => {
         p.name,
         p.product_code,
         (
-          SELECT v.mrp FROM product_variants v WHERE v.product_id = p.id ORDER BY v.created_at ASC LIMIT 1
+          SELECT v.mrp
+          FROM product_variants v
+          WHERE v.product_id = p.id
+          ORDER BY v.created_at ASC
+          LIMIT 1
         ) AS price_per_unit,
         (
-          SELECT pi.media_url FROM products_image pi WHERE pi.product_id = p.id AND (pi.variant_id IS NULL OR pi.variant_id IN (
-             SELECT id FROM product_variants pv WHERE pv.product_id = p.id LIMIT 1
-          )) AND pi.display_order = 1 LIMIT 1
+          SELECT pi.media_url
+          FROM products_image pi
+          WHERE pi.product_id = p.id
+            AND (pi.variant_id IS NULL OR pi.variant_id IN (
+              SELECT id
+              FROM product_variants pv
+              WHERE pv.product_id = p.id
+              LIMIT 1
+            ))
+            AND pi.display_order = 1
+          LIMIT 1
         ) AS product_image
       FROM products p
       WHERE p.brand_id = $1
+      ${categoryFilter}
     ),
     CountResult AS (
       SELECT COUNT(*) AS total_count FROM FilteredProducts
@@ -402,8 +448,12 @@ const getBrandsProductList = async ({ brand_id, page = 1, limit = 20 }) => {
     ORDER BY fp.name ASC
     LIMIT $2 OFFSET $3;
   `;
-  const { rows } = await pool.query(query, [brand_id, limit, offset]);
-  if (!rows.length) return { products: [], total_count: 0, brand_name: null };
+
+  const { rows } = await pool.query(query, values);
+
+  if (!rows.length) {
+    return { products: [], total_count: 0, brand_name: null };
+  }
 
   return {
     brand_name: rows[0].brand_name,
@@ -421,6 +471,7 @@ const getBrandsProductList = async ({ brand_id, page = 1, limit = 20 }) => {
 /**
  * Fuzzy search / paginated list - still searches the product master but ranks by product name/description/brand/category
  * Returns primary variant price and image as overview fields to preserve old API contract.
+ * Returns categorised products for logged in users
  */
 const getProductListBySearch = async ({
   name,

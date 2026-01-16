@@ -65,7 +65,11 @@ router.post("/", createSingleProductHandler);
 
 // GET /api/products/brands/:id?page=1
 // Allowed for all roles
-router.get("/brands/:id", getBrandsProductListHandler);
+router.get(
+  "/brands/:id",
+  optionalAuthenticateToken,
+  getBrandsProductListHandler
+);
 
 // Fuzzy Search GET /api/products/list?name=xyz&page=1&limit=20
 // Fuzzy Search GET /api/products/list?product_id=uuid
