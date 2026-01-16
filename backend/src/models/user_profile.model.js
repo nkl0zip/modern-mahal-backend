@@ -15,12 +15,36 @@ const getUserProfile = async (userId) => {
       up.bio,
       up.created_at AS profile_created_at,
       up.updated_at AS profile_updated_at,
-      up.working_email
+      up.working_email,
+
+      COALESCE(
+        json_agg(
+          DISTINCT jsonb_build_object(
+            'id', c.id,
+            'name', c.name
+          )
+        ) FILTER (WHERE c.id IS NOT NULL),
+        '[]'
+      ) AS selected_categories
 
     FROM users u
     LEFT JOIN user_profiles up
       ON u.id = up.user_id
+    LEFT JOIN user_category_preferences ucp
+      ON u.id = ucp.user_id
+    LEFT JOIN categories c
+      ON c.id = ucp.category_id
+
     WHERE u.id = $1
+    GROUP BY 
+      u.id,
+      up.user_id,
+      up.date_of_birth,
+      up.avatar_url,
+      up.bio,
+      up.created_at,
+      up.updated_at,
+      up.working_email;
   `;
 
   const result = await pool.query(query, [userId]);

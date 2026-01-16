@@ -24,6 +24,7 @@ const ticketRoutes = require("./routes/staff/ticket.routes");
 const productVariantRoutes = require("./routes/staff/productVariant.routes");
 const segmentRoutes = require("./routes/admin/segment.routes");
 const orderChatRoutes = require("./routes/staff/orderTemplate.routes");
+const userDetailRoutes = require("./routes/staff/userDetails.routes");
 
 const errorHandler = require("./middlewares/error.middleware");
 
@@ -59,6 +60,7 @@ app.use("/api/tickets", ticketRoutes);
 app.use("/api/products/variant", productVariantRoutes);
 app.use("/api/segment", segmentRoutes);
 app.use("/api/order-templates", orderChatRoutes);
+app.use("/api/user", userDetailRoutes);
 
 app.use(errorHandler);
 
