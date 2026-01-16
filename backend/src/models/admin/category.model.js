@@ -34,9 +34,24 @@ const deleteCategoryById = async (id) => {
   return result.rows[0];
 };
 
+/**
+ * Update is_global flag
+ */
+const updateCategoryGlobalFlag = async (categoryId, isGlobal) => {
+  const query = `
+    UPDATE categories
+    SET is_global = $1
+    WHERE id = $2
+    RETURNING id, name, is_global;
+  `;
+  const { rows } = await pool.query(query, [isGlobal, categoryId]);
+  return rows[0] || null;
+};
+
 module.exports = {
   createCategory,
   findCategoryByNameOrSlug,
   getAllCategories,
   deleteCategoryById,
+  updateCategoryGlobalFlag,
 };

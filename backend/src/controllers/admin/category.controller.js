@@ -3,6 +3,7 @@ const {
   findCategoryByNameOrSlug,
   getAllCategories,
   deleteCategoryById,
+  updateCategoryGlobalFlag,
 } = require("../../models/admin/category.model");
 
 // POST /api/category
@@ -62,8 +63,38 @@ const deleteCategoryHandler = async (req, res, next) => {
   }
 };
 
+/**
+ * ADMIN: Set / unset global category
+ * Body: { category_id, is_global }
+ */
+const setCategoryGlobalHandler = async (req, res, next) => {
+  try {
+    const { category_id, is_global } = req.body;
+
+    if (!category_id || typeof is_global !== "boolean") {
+      return res.status(400).json({
+        message: "category_id and is_global (boolean) are required.",
+      });
+    }
+
+    const updated = await updateCategoryGlobalFlag(category_id, is_global);
+
+    res.status(200).json({
+      success: true,
+      message: `Category marked as ${
+        is_global ? "global" : "non-global"
+      } successfully.`,
+      category: updated,
+    });
+  } catch (error) {
+    console.error("Error in setCategoryGlobalHandler:", error);
+    next(error);
+  }
+};
+
 module.exports = {
   createCategoryHandler,
   getAllCategoriesHandler,
   deleteCategoryHandler,
+  setCategoryGlobalHandler,
 };
