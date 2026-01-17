@@ -266,6 +266,26 @@ async function getProductDetailsById(productId) {
         JOIN segments s ON ps.segment_id = s.id
         WHERE ps.product_id = p.id
       ) AS segments,
+      jsonb_build_object(
+        'colours', (
+          SELECT ARRAY_AGG(DISTINCT col.name)
+          FROM product_variants v
+          JOIN colours col ON col.id = v.colour_id
+          WHERE v.product_id = p.id
+        ),
+        'finishes', (
+          SELECT ARRAY_AGG(DISTINCT fin.name)
+          FROM product_variants v
+          JOIN finishes fin ON fin.id = v.finish_id
+          WHERE v.product_id = p.id
+        ),
+        'weight_capacities', (
+          SELECT ARRAY_AGG(DISTINCT v.weight_capacity)
+          FROM product_variants v
+          WHERE v.product_id = p.id
+            AND v.weight_capacity IS NOT NULL
+        )
+      ) AS product_attributes,
       ARRAY(
         SELECT jsonb_build_object(
           'id', v.id,
