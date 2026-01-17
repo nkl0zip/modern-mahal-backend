@@ -29,6 +29,8 @@ const {
   hardDeleteProduct,
 } = require("../../models/staff/product.model");
 
+const { getProductReviewStats } = require("../../models/review.model");
+
 /* ---------------------------------------------------
    Utility: Normalize Excel Row Headers
    --------------------------------------------------- */
@@ -566,12 +568,37 @@ const getProductOverviewPaginatedHandler = async (req, res, next) => {
 const getProductDetailsByIdHandler = async (req, res, next) => {
   try {
     const { id } = req.params;
-    if (!id) return res.status(401).json({ message: "Product_Id is required" });
+    if (!id) {
+      return res.status(401).json({ message: "Product_Id is required" });
+    }
+
+    // 1. Get product details
     const product = await getProductDetailsById(id);
-    if (!product) return res.status(404).json({ message: "Product not found" });
-    return res
-      .status(200)
-      .json({ message: "Product fetched successfully", data: product });
+    if (!product) {
+      return res.status(404).json({ message: "Product not found" });
+    }
+
+    // 2. Get review stats
+    const reviewStats = await getProductReviewStats(id);
+
+    // 3. Attach reviews to product
+    const productWithReviews = {
+      ...product,
+      reviews: {
+        avg_rating: Number(reviewStats.avg_rating),
+        total_reviews: Number(reviewStats.total_reviews),
+        five_star: Number(reviewStats.five_star),
+        four_star: Number(reviewStats.four_star),
+        three_star: Number(reviewStats.three_star),
+        two_star: Number(reviewStats.two_star),
+        one_star: Number(reviewStats.one_star),
+      },
+    };
+
+    return res.status(200).json({
+      message: "Product fetched successfully",
+      data: productWithReviews,
+    });
   } catch (err) {
     console.error("Error fetching the product list: ", err);
     next(err);
