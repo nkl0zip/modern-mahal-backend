@@ -51,7 +51,7 @@ const findOrCreateProductByCode = async (product) => {
   // try find existing by product_code
   const existing = await pool.query(
     `SELECT * FROM products WHERE product_code = $1 LIMIT 1;`,
-    [product.product_code]
+    [product.product_code],
   );
   if (existing.rows[0]) return existing.rows[0];
 
@@ -83,7 +83,7 @@ const createVariant = async (productId, variantData) => {
   // Skip if sub_code is null or empty - variants without sub_code can be duplicated
   if (!variantData.sub_code || variantData.sub_code.trim() === "") {
     console.warn(
-      `Variant skipped: No sub_code provided for product ${productId}`
+      `Variant skipped: No sub_code provided for product ${productId}`,
     );
     return null;
   }
@@ -267,19 +267,19 @@ async function getProductDetailsById(productId) {
         WHERE ps.product_id = p.id
       ) AS segments,
       jsonb_build_object(
-        'colours', (
+        'colour', (
           SELECT ARRAY_AGG(DISTINCT col.name)
           FROM product_variants v
           JOIN colours col ON col.id = v.colour_id
           WHERE v.product_id = p.id
         ),
-        'finishes', (
+        'finish', (
           SELECT ARRAY_AGG(DISTINCT fin.name)
           FROM product_variants v
           JOIN finishes fin ON fin.id = v.finish_id
           WHERE v.product_id = p.id
         ),
-        'weight_capacities', (
+        'weight_capacity', (
           SELECT ARRAY_AGG(DISTINCT v.weight_capacity)
           FROM product_variants v
           WHERE v.product_id = p.id
@@ -1062,7 +1062,7 @@ const updateProductCategories = async (product_id, category_ids) => {
        FROM categories c
        JOIN product_category pc ON c.id = pc.category_id
        WHERE pc.product_id = $1`,
-      [product_id]
+      [product_id],
     );
 
     await client.query("COMMIT");
@@ -1107,7 +1107,7 @@ const updateProductSegments = async (product_id, segment_ids) => {
        FROM segments s
        JOIN product_segments ps ON s.id = ps.segment_id
        WHERE ps.product_id = $1`,
-      [product_id]
+      [product_id],
     );
 
     await client.query("COMMIT");
@@ -1137,7 +1137,7 @@ const softDeleteProduct = async (product_id) => {
        SET status = 'DISCONTINUED'
        WHERE product_id = $1
        RETURNING id, sub_code`,
-      [product_id]
+      [product_id],
     );
 
     // Get product info before any deletion
@@ -1146,7 +1146,7 @@ const softDeleteProduct = async (product_id) => {
        FROM products p 
        LEFT JOIN brands b ON p.brand_id = b.id 
        WHERE p.id = $1`,
-      [product_id]
+      [product_id],
     );
 
     if (productRows.length === 0) {
@@ -1183,12 +1183,12 @@ const hardDeleteProduct = async (product_id) => {
        FROM cart_items ci
        JOIN product_variants pv ON ci.variant_id = pv.id
        WHERE pv.product_id = $1`,
-      [product_id]
+      [product_id],
     );
 
     if (parseInt(cartCheck.rows[0].count) > 0) {
       throw new Error(
-        `Cannot delete product: Variants are in ${cartCheck.rows[0].count} cart items`
+        `Cannot delete product: Variants are in ${cartCheck.rows[0].count} cart items`,
       );
     }
 
@@ -1198,7 +1198,7 @@ const hardDeleteProduct = async (product_id) => {
     // Get product info before deletion for response
     const { rows: productRows } = await client.query(
       `SELECT * FROM products WHERE id = $1`,
-      [product_id]
+      [product_id],
     );
 
     if (productRows.length === 0) {
@@ -1262,7 +1262,7 @@ const hardDeleteProduct = async (product_id) => {
     // 12. Finally delete the product
     const { rows: deletedProduct } = await client.query(
       "DELETE FROM products WHERE id = $1 RETURNING *",
-      [product_id]
+      [product_id],
     );
 
     await client.query("COMMIT");
