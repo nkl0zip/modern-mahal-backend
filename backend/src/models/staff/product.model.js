@@ -249,6 +249,7 @@ async function getProductDetailsById(productId) {
       p.id,
       p.name AS product_name,
       b.name AS brand,
+      b.image AS brand_image,
       p.product_code,
       p.description,
       p.segment,
