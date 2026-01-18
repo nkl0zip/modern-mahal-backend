@@ -16,7 +16,7 @@ const createOrderTemplate = async ({
     VALUES ($1, $2, $3, $4, $5)
     RETURNING *;
     `,
-    [user_id, staff_id, title, description, created_by]
+    [user_id, staff_id, title, description, created_by],
   );
   return rows[0];
 };
@@ -40,7 +40,7 @@ const getTemplateById = async (template_id) => {
     WHERE ot.id = $1 AND ot.is_deleted = false
     LIMIT 1;
     `,
-    [template_id]
+    [template_id],
   );
   return rows[0] || null;
 };
@@ -228,7 +228,7 @@ const softDeleteTemplate = async (template_id) => {
     WHERE id = $1
     RETURNING *;
     `,
-    [template_id]
+    [template_id],
   );
   return rows[0] || null;
 };
@@ -246,7 +246,7 @@ const finalizeTemplate = async (template_id) => {
     WHERE id = $1 AND is_deleted = false
     RETURNING *;
     `,
-    [template_id]
+    [template_id],
   );
   return rows[0] || null;
 };
@@ -269,7 +269,7 @@ const checkTemplateAccess = async (template_id, user_id, user_role) => {
     WHERE ot.id = $1 AND ot.is_deleted = false
     LIMIT 1;
     `,
-    [template_id, user_id, user_role]
+    [template_id, user_id, user_role],
   );
 
   if (!rows[0]) return null;
@@ -287,9 +287,173 @@ const assignStaffToTemplate = async (template_id, staff_id) => {
     WHERE id = $1 AND is_deleted = false
     RETURNING *;
     `,
-    [template_id, staff_id]
+    [template_id, staff_id],
   );
   return rows[0] || null;
+};
+
+/**
+ * Get all Templates by ADMIN/STAFF with pagination
+ */
+const getAllTemplates = async (page = 1, limit = 50, filters = {}) => {
+  const offset = (page - 1) * limit;
+
+  let query = `
+    SELECT 
+      ot.*,
+      u.name as user_name,
+      u.email as user_email,
+      u.phone as user_phone,
+      s.name as staff_name,
+      s.email as staff_email,
+      (SELECT COUNT(*) FROM order_template_items oti WHERE oti.template_id = ot.id AND oti.status != 'CANCELLED') as item_count,
+      (SELECT COUNT(*) FROM order_template_chats otc WHERE otc.template_id = ot.id AND otc.deleted_at IS NULL) as chat_count,
+      (SELECT COUNT(*) FROM order_template_chats otc WHERE otc.template_id = ot.id AND otc.is_read = false AND otc.deleted_at IS NULL) as unread_messages
+    FROM order_templates ot
+    LEFT JOIN users u ON ot.user_id = u.id
+    LEFT JOIN users s ON ot.staff_id = s.id
+    WHERE ot.is_deleted = false
+  `;
+
+  let countQuery = `
+    SELECT COUNT(*) as total
+    FROM order_templates ot
+    WHERE ot.is_deleted = false
+  `;
+
+  const params = [];
+  const countParams = [];
+  let paramCounter = 1;
+
+  // Apply Filters
+  if (filters.status) {
+    query += ` AND ot.status = $${paramCounter}`;
+    countQuery += ` AND ot.status = $1`;
+    params.push(filters.status);
+    countParams.push(filters.status);
+    paramCounter++;
+  }
+
+  if (filters.user_id) {
+    query += ` AND ot.user_id = $${paramCounter}`;
+    countQuery += ` AND ot.user_id = $${countParams.length + 1}`;
+    params.push(filters.user_id);
+    countParams.push(filters.user_id);
+    paramCounter++;
+  }
+
+  if (filters.staff_id) {
+    query += ` AND ot.staff_id = $${paramCounter}`;
+    countQuery += ` AND ot.staff_id = $${countParams.length + 1}`;
+    params.push(filters.staff_id);
+    countParams.push(filters.staff_id);
+    paramCounter++;
+  }
+
+  if (filters.created_by) {
+    query += ` AND ot.created_by = $${paramCounter}`;
+    countQuery += ` AND ot.created_by = $${countParams.length + 1}`;
+    params.push(filters.created_by);
+    countParams.push(filters.created_by);
+    paramCounter++;
+  }
+
+  if (filters.search) {
+    query += ` AND (
+      ot.title ILIKE $${paramCounter} OR 
+      ot.description ILIKE $${paramCounter} OR
+      u.name ILIKE $${paramCounter} OR
+      u.email ILIKE $${paramCounter}
+    )`;
+    countQuery += ` AND (
+      ot.title ILIKE $${countParams.length + 1} OR 
+      ot.description ILIKE $${countParams.length + 1} OR
+      EXISTS (SELECT 1 FROM users u WHERE u.id = ot.user_id AND (u.name ILIKE $${countParams.length + 1} OR u.email ILIKE $${countParams.length + 1}))
+    )`;
+    params.push(`%${filters.search}%`);
+    countParams.push(`%${filters.search}%`);
+    paramCounter++;
+  }
+
+  // Date range filters
+  if (filters.start_date) {
+    query += ` AND ot.created_at >= $${paramCounter}`;
+    countQuery += ` AND ot.created_at >= $${countParams.length + 1}`;
+    params.push(filters.start_date);
+    countParams.push(filters.start_date);
+    paramCounter++;
+  }
+
+  if (filters.end_date) {
+    query += ` AND ot.created_at <= $${paramCounter}`;
+    countQuery += ` AND ot.created_at <= $${countParams.length + 1}`;
+    params.push(filters.end_date);
+    countParams.push(filters.end_date);
+    paramCounter++;
+  }
+
+  // Add sorting
+  const sortField = filters.sort_by || "created_at";
+  const sortOrder = filters.sort_order === "asc" ? "ASC" : "DESC";
+  query += ` ORDER BY ot.${sortField} ${sortOrder}`;
+
+  // Add pagination
+  query += ` LIMIT $${paramCounter} OFFSET $${paramCounter + 1}`;
+  params.push(limit, offset);
+
+  try {
+    // Get templates
+    const { rows: templates } = await pool.query(query, params);
+
+    // Get total counts
+    const { rows: countRows } = await pool.query(countQuery, countParams);
+    const total = parseInt(countRows[0].total);
+
+    // Calculate pagination metadata
+    const totalPages = Math.ceil(total / limit);
+    const hasNextPage = page < totalPages;
+    const hasPrevPage = page > 1;
+
+    return {
+      templates,
+      pagination: {
+        current_page: page,
+        per_page: limit,
+        total_items: total,
+        total_pages: totalPages,
+        has_next_page: hasNextPage,
+        has_prev_page: hasPrevPage,
+        next_page: hasNextPage ? page + 1 : null,
+        prev_page: hasPrevPage ? page - 1 : null,
+      },
+    };
+  } catch (err) {
+    console.error("Error fetching all temlplates: ", err);
+    throw err;
+  }
+};
+
+/**
+ * Get template statistics by ADMIN/STAFF
+ */
+const getTemplateStatistics = async () => {
+  const { rows } = await pool.query(`
+    SELECT 
+      COUNT(*) as total_templates,
+      COUNT(CASE WHEN status = 'DRAFT' THEN 1 END) as draft_count,
+      COUNT(CASE WHEN status = 'ACTIVE' THEN 1 END) as active_count,
+      COUNT(CASE WHEN status = 'COMPLETED' THEN 1 END) as completed_count,
+      COUNT(CASE WHEN status = 'CANCELLED' THEN 1 END) as cancelled_count,
+      COUNT(CASE WHEN staff_id IS NULL THEN 1 END) as unassigned_count,
+      COUNT(CASE WHEN staff_id IS NOT NULL THEN 1 END) as assigned_count,
+      COUNT(DISTINCT user_id) as unique_users,
+      SUM(total_cost) as total_value,
+      AVG(total_cost) as avg_value
+    FROM order_templates
+    WHERE is_deleted = false;
+  `);
+
+  return rows[0];
 };
 
 module.exports = {
@@ -302,4 +466,6 @@ module.exports = {
   finalizeTemplate,
   checkTemplateAccess,
   assignStaffToTemplate,
+  getAllTemplates,
+  getTemplateStatistics,
 };

@@ -26,6 +26,11 @@ const {
 } = require("../../controllers/staff/orderTemplateChat.controller");
 
 const {
+  getAllTemplatesHandler,
+  getTemplateStatisticsHandler,
+} = require("../../controllers/staff/orderTemplateList.controller");
+
+const {
   authenticateToken,
   requireRole,
 } = require("../../middlewares/auth.middleware");
@@ -47,7 +52,7 @@ router.post("/:template_id/finalize", finalizeTemplateHandler);
 router.post(
   "/:template_id/assign-staff",
   requireRole(["STAFF", "ADMIN"]),
-  assignStaffHandler
+  assignStaffHandler,
 );
 
 // Template Items Routes
@@ -62,10 +67,22 @@ router.get("/:template_id/chats", getTemplateChatsHandler);
 router.post(
   "/:template_id/chats",
   upload.array("attachments", 5),
-  sendChatMessageHandler
+  sendChatMessageHandler,
 );
 router.delete("/chats/:chat_id", deleteChatMessageHandler);
 router.get("/:template_id/unread-count", getUnreadCountHandler);
 router.post("/:template_id/mark-read", markAsReadHandler);
+
+// Template List Routes (ADMIN/STAFF only)
+router.get(
+  "/admin/all",
+  requireRole(["STAFF", "ADMIN"]),
+  getAllTemplatesHandler,
+);
+router.get(
+  "/admin/stats",
+  requireRole(["STAFF", "ADMIN"]),
+  getTemplateStatisticsHandler,
+);
 
 module.exports = router;
