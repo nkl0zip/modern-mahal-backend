@@ -228,10 +228,13 @@ const TicketModel = {
       t.priority,
       t.created_at,
       t.user_id,
+      t.assigned_staff_id,
+      staff.name as staff_name,
       up.avatar_url,
       COUNT(*) OVER() AS total_count
       FROM tickets t
       LEFT JOIN user_profiles up ON t.user_id = up.user_id
+      LEFT JOIN users staff ON t.assigned_staff_id = staff.id
       ${where}
       ORDER BY created_at DESC
       LIMIT $${idx++} OFFSET $${idx++};
