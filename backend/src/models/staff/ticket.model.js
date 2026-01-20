@@ -138,6 +138,14 @@ const TicketModel = {
     return rows[0];
   },
 
+  async getTicketsByAssignedStaff(staff_id) {
+    const sql = `
+      SELECT * FROM tickets WHERE assigned_staff_id = $1 ORDER BY created_at DESC;
+    `;
+    const { rows } = await pool.query(sql, [staff_id]);
+    return rows;
+  },
+
   async checkIfStaffAssigned(ticket_id, staff_id) {
     const sql = `
     SELECT 1

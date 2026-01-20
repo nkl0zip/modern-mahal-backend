@@ -17,19 +17,19 @@ router.post(
   "/",
   authenticateToken,
   upload.single("attachment"), // optional file field name: 'attachment'
-  (req, res) => TicketController.createTicket(req, res)
+  (req, res) => TicketController.createTicket(req, res),
 );
 
 // To get a Ticket by TicketId
 // GET: /api/tickets/:id
 router.get("/:id", authenticateToken, (req, res) =>
-  TicketController.getTicket(req, res)
+  TicketController.getTicket(req, res),
 );
 router.get("/", authenticateToken, (req, res) =>
-  TicketController.listUserTickets(req, res)
+  TicketController.listUserTickets(req, res),
 );
 router.delete("/:id", authenticateToken, (req, res) =>
-  TicketController.deleteTicket(req, res)
+  TicketController.deleteTicket(req, res),
 );
 
 // Add attachment to an existing ticket (user or staff)
@@ -38,7 +38,13 @@ router.post(
   "/:id/attachments",
   authenticateToken,
   upload.single("attachment"),
-  (req, res) => TicketController.addAttachment(req, res)
+  (req, res) => TicketController.addAttachment(req, res),
+);
+
+// Get All Tickets Assigned to a staff
+// GET: /api/tickets/staff/all
+router.get("/staff/all", authenticateToken, requireRole("STAFF"), (req, res) =>
+  TicketController.getTicketsByAssignedStaff(req, res),
 );
 
 /*
@@ -54,7 +60,7 @@ router.get(
     if (req.user.role === "STAFF" || req.user.role === "ADMIN") return next();
     return res.status(403).json({ message: "Access denied" });
   },
-  (req, res) => TicketController.listAllTickets(req, res)
+  (req, res) => TicketController.listAllTickets(req, res),
 );
 
 // assign to staff (admin/staff)
@@ -66,7 +72,7 @@ router.patch(
     if (req.user.role === "STAFF" || req.user.role === "ADMIN") return next();
     return res.status(403).json({ message: "Access denied" });
   },
-  (req, res) => TicketController.assignTicket(req, res)
+  (req, res) => TicketController.assignTicket(req, res),
 );
 
 // transfer a ticket to another STAFF - Allowed to Staff & Admin
@@ -78,7 +84,7 @@ router.patch(
     if (req.user.role === "STAFF" || req.user.role === "ADMIN") return next();
     return res.status(403).json({ message: "Access denied" });
   },
-  (req, res) => TicketController.transferTicket(req, res)
+  (req, res) => TicketController.transferTicket(req, res),
 );
 
 // update status of a ticket - By Admin & Staff
@@ -90,19 +96,19 @@ router.patch(
     if (req.user.role === "STAFF" || req.user.role === "ADMIN") return next();
     return res.status(403).json({ message: "Access denied" });
   },
-  (req, res) => TicketController.updateStatus(req, res)
+  (req, res) => TicketController.updateStatus(req, res),
 );
 
 // get activities
 // GET: /api/tickets/:id/activities
 router.get("/:id/activities", authenticateToken, (req, res) =>
-  TicketController.getActivities(req, res)
+  TicketController.getActivities(req, res),
 );
 
 // get attachments in a Ticket
 // GET: /api/tickets/:id/attachments
 router.get("/:id/attachments", authenticateToken, (req, res) =>
-  TicketController.getAttachments(req, res)
+  TicketController.getAttachments(req, res),
 );
 
 // staff stats - Allowed by Both Admin & Staff
@@ -114,7 +120,7 @@ router.get(
     if (req.user.role === "STAFF" || req.user.role === "ADMIN") return next();
     return res.status(403).json({ message: "Access denied" });
   },
-  (req, res) => TicketController.getStaffStats(req, res)
+  (req, res) => TicketController.getStaffStats(req, res),
 );
 
 // getDetailsById - Allowed by Both Admin & staff
@@ -123,7 +129,7 @@ router.get(
   "/details/:id",
   authenticateToken,
   requireRole(["STAFF", "ADMIN"]),
-  (req, res) => TicketController.getTicketDetailsById(req, res)
+  (req, res) => TicketController.getTicketDetailsById(req, res),
 );
 
 module.exports = router;

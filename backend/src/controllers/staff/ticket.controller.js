@@ -317,7 +317,7 @@ const TicketController = {
       if (user.role === "STAFF") {
         const isAssigned = await TicketModel.checkIfStaffAssigned(
           ticketId,
-          user.id
+          user.id,
         );
 
         if (!isAssigned) {
@@ -336,6 +336,20 @@ const TicketController = {
       return res.status(200).json({ message: "Status updated" });
     } catch (err) {
       console.error("updateStatus error:", err);
+      return res.status(500).json({ message: "Internal server error" });
+    }
+  },
+
+  async getTicketsByAssignedStaff(req, res) {
+    try {
+      const staff = req.user.id;
+      if (!staff)
+        return res.status(404).json({ message: "Staff ID is required" });
+
+      const tickets = await TicketModel.getTicketsByAssignedStaff(staff);
+      return res.status(200).json({ tickets });
+    } catch (err) {
+      console.error("getTicketsByAssignedStaff error: ", err);
       return res.status(500).json({ message: "Internal server error" });
     }
   },
