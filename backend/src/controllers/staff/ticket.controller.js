@@ -342,14 +342,25 @@ const TicketController = {
 
   async getTicketsByAssignedStaff(req, res) {
     try {
-      const staff = req.user.id;
-      if (!staff)
-        return res.status(404).json({ message: "Staff ID is required" });
+      const user = req.user;
 
-      const tickets = await TicketModel.getTicketsByAssignedStaff(staff);
+      const { status, type, search, limit = 50, offset = 0 } = req.query;
+
+      const filter = {};
+      if (status) filter.status = status;
+      if (type) filter.type = type;
+      if (search) filter.search = search;
+
+      const tickets = await TicketModel.getTicketsByAssignedStaff({
+        staff_id: user.id,
+        filter,
+        limit: parseInt(limit),
+        offset: parseInt(offset),
+      });
+
       return res.status(200).json({ tickets });
     } catch (err) {
-      console.error("getTicketsByAssignedStaff error: ", err);
+      console.error("getTicketsByAssignedStaff error:", err);
       return res.status(500).json({ message: "Internal server error" });
     }
   },

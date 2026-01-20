@@ -170,15 +170,65 @@ const TicketModel = {
     return rows[0];
   },
 
-  async getActiveAssignmentForTicket(ticket_id) {
+  async getTicketsByAssignedStaff({
+    staff_id,
+    filter = {},
+    limit = 50,
+    offset = 0,
+  } = {}) {
+    const conditions = ["t.is_deleted = false", "t.assigned_staff_id = $1"];
+
+    const params = [staff_id];
+    let idx = 2;
+
+    if (filter.status) {
+      conditions.push(`t.status = $${idx++}`);
+      params.push(filter.status);
+    }
+
+    if (filter.type) {
+      conditions.push(`t.type = $${idx++}`);
+      params.push(filter.type);
+    }
+
+    if (filter.search) {
+      conditions.push(`(t.title ILIKE $${idx} OR t.message ILIKE $${idx})`);
+      params.push(`%${filter.search}%`);
+      idx++;
+    }
+
+    const where = `WHERE ${conditions.join(" AND ")}`;
+
     const sql = `
-      SELECT * FROM ticket_assignments
-      WHERE ticket_id = $1 AND active = true
-      ORDER BY assigned_at DESC
-      LIMIT 1;
-    `;
-    const { rows } = await pool.query(sql, [ticket_id]);
-    return rows[0];
+    SELECT
+      t.id,
+      t.title,
+      t.type,
+      t.status,
+      t.priority,
+      t.created_at,
+      t.updated_at,
+      t.user_id,
+      t.assigned_staff_id,
+      staff.name AS staff_name,
+      up.avatar_url,
+      COUNT(*) OVER() AS total_count
+    FROM tickets t
+    LEFT JOIN user_profiles up ON t.user_id = up.user_id
+    LEFT JOIN users staff ON t.assigned_staff_id = staff.id
+    ${where}
+    ORDER BY t.created_at DESC
+    LIMIT $${idx++} OFFSET $${idx++};
+  `;
+
+    params.push(limit, offset);
+
+    const { rows } = await pool.query(sql, params);
+
+    return {
+      total: rows.length ? Number(rows[0].total_count) : 0,
+      tickets: rows.map(({ total_count, ...ticket }) => ticket),
+    };
   },
 
   async getAssignmentsSumSeconds(ticket_id) {
