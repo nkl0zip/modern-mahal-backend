@@ -1,4 +1,4 @@
-const { updateUser } = require("../models/user.model");
+const { updateUser, assignSlabToUser } = require("../models/user.model");
 const {
   getUserProfile,
   upsertUserProfile,
@@ -42,7 +42,7 @@ const updateProfile = async (req, res) => {
       date_of_birth,
       avatarUrl,
       bio,
-      working_email
+      working_email,
     );
 
     res.status(200).json({
@@ -141,10 +141,38 @@ const getUserCategoriesHandler = async (req, res, next) => {
   }
 };
 
+/**
+ * ADMIN / STAFF: Assign slab to a USER
+ * Body: { user_id, slab_id }
+ */
+const assignUserSlabHandler = async (req, res, next) => {
+  try {
+    const { user_id, slab_id } = req.body;
+
+    if (!user_id || !slab_id) {
+      return res.status(400).json({
+        message: "user_id and slab_id are required.",
+      });
+    }
+
+    const updatedUser = await assignSlabToUser(user_id, slab_id);
+
+    return res.status(200).json({
+      success: true,
+      message: "User slab updated successfully.",
+      user: updatedUser,
+    });
+  } catch (error) {
+    console.error("Error in assignUserSlabHandler:", error);
+    next(error);
+  }
+};
+
 module.exports = {
   getProfileHandler,
   updateProfile,
   setUserCategoriesHandler,
   updateUserCategoriesHandler,
   getUserCategoriesHandler,
+  assignUserSlabHandler,
 };

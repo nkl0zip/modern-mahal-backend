@@ -6,8 +6,12 @@ const {
   setUserCategoriesHandler,
   getUserCategoriesHandler,
   updateUserCategoriesHandler,
+  assignUserSlabHandler,
 } = require("../controllers/profile.controller");
-const { authenticateToken } = require("../middlewares/auth.middleware");
+const {
+  authenticateToken,
+  requireRole,
+} = require("../middlewares/auth.middleware");
 const upload = require("../middlewares/upload.middleware");
 
 // GET /api/profile
@@ -23,10 +27,19 @@ router.post("/categories/set", authenticateToken, setUserCategoriesHandler);
 router.patch(
   "/categories/update",
   authenticateToken,
-  updateUserCategoriesHandler
+  updateUserCategoriesHandler,
 );
 
-// GET /api/user/categories
+// GET /api/profile/categories
 router.get("/categories", authenticateToken, getUserCategoriesHandler);
+
+// POST /api/profile/assign/slab
+// Only for ADMIN/STAFF
+router.post(
+  "/assign/slab",
+  authenticateToken,
+  requireRole(["STAFF", "ADMIN"]),
+  assignUserSlabHandler,
+);
 
 module.exports = router;

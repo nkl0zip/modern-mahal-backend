@@ -5,7 +5,7 @@ const createUser = async (
   email,
   passwordHash,
   phone,
-  isVerified = false
+  isVerified = false,
 ) => {
   // Force isVerified to boolean true/false (avoids DEFAULT)
   isVerified = Boolean(isVerified);
@@ -58,10 +58,24 @@ const updateUser = async (userId, name) => {
   return result.rows[0];
 };
 
+// Assign a slab to a user
+const assignSlabToUser = async (userId, slabId) => {
+  const query = `
+    UPDATE users
+    SET slab_id = $1
+    WHERE id = $2
+      AND role = 'USER'
+    RETURNING id, name, email, slab_id;
+  `;
+  const { rows } = await pool.query(query, [slabId, userId]);
+  return rows[0] || null;
+};
+
 module.exports = {
   createUser,
   findUserByEmail,
   findUserByPhone,
   updateUserPhoneAndVerify,
   updateUser,
+  assignSlabToUser,
 };
