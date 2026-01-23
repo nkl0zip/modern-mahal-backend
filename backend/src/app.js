@@ -25,6 +25,7 @@ const productVariantRoutes = require("./routes/staff/productVariant.routes");
 const segmentRoutes = require("./routes/admin/segment.routes");
 const orderChatRoutes = require("./routes/staff/orderTemplate.routes");
 const userDetailRoutes = require("./routes/staff/userDetails.routes");
+const discountRoutes = require("./routes/staff/discount.routes");
 
 const errorHandler = require("./middlewares/error.middleware");
 
@@ -61,6 +62,7 @@ app.use("/api/products/variant", productVariantRoutes);
 app.use("/api/segment", segmentRoutes);
 app.use("/api/order-templates", orderChatRoutes);
 app.use("/api/user", userDetailRoutes);
+app.use("/api/discount", discountRoutes);
 
 app.use(errorHandler);
 
