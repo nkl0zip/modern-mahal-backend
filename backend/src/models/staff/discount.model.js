@@ -143,11 +143,27 @@ const getUserManualDiscounts = async (userId) => {
  */
 const listDiscountByType = async (type) => {
   const query = `
-    SELECT *
-    FROM discounts
-    WHERE type = $1
-    ORDER BY created_at DESC;
+    SELECT
+      d.*,
+      COALESCE(
+        json_agg(
+          DISTINCT jsonb_build_object(
+            'id', s.id,
+            'name', s.name
+          )
+        ) FILTER (WHERE s.id IS NOT NULL),
+        '[]'
+      ) AS segments
+    FROM discounts d
+    LEFT JOIN discount_segments ds
+      ON ds.discount_id = d.id
+    LEFT JOIN segments s
+      ON s.id = ds.segment_id
+    WHERE d.type = $1
+    GROUP BY d.id
+    ORDER BY d.created_at DESC;
   `;
+
   const { rows } = await pool.query(query, [type]);
   return rows;
 };
