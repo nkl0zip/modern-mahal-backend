@@ -238,6 +238,16 @@ const deleteDiscountById = async (discountId) => {
   return rows[0] || null;
 };
 
+/**
+ * Get User that is assigned to a Coupon
+ */
+const getUserByCoupon = async (discountId) => {
+  const query = `
+  SELECT * FROM user_discounts WHERE discount_id = $1`;
+
+  await pool.query(query, [discountId]);
+};
+
 module.exports = {
   createDiscount,
   addDiscountSegments,
@@ -251,4 +261,5 @@ module.exports = {
   toggleDiscountStatus,
   listDiscountActivities,
   deleteDiscountById,
+  getUserByCoupon,
 };
