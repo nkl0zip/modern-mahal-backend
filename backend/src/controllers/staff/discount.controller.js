@@ -9,7 +9,7 @@ const {
   toggleDiscountStatus,
   updateDiscount,
   deleteDiscountById,
-  getUserByCoupon,
+  listManualDiscountsWithUsers,
 } = require("../../models/staff/discount.model");
 
 /**
@@ -125,9 +125,8 @@ const listCouponDiscountsHandler = async (req, res) => {
  */
 const listManualDiscountsHandler = async (req, res) => {
   try {
-    const discounts = await listDiscountByType("MANUAL");
-    const user = await getUserByCoupon(discounts.id);
-    res.status(200).json({ discounts, user });
+    const discounts = await listManualDiscountsWithUsers();
+    res.status(200).json({ discounts });
   } catch (error) {
     console.error(error);
     res.status(500).json({ message: "Failed to fetch manual discounts" });

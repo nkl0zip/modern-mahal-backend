@@ -241,11 +241,47 @@ const deleteDiscountById = async (discountId) => {
 /**
  * Get User that is assigned to a Coupon
  */
-const getUserByCoupon = async (discountId) => {
+const listManualDiscountsWithUsers = async () => {
   const query = `
-  SELECT * FROM user_discounts WHERE discount_id = $1`;
+    SELECT
+      d.*,
 
-  await pool.query(query, [discountId]);
+      /* Assigned users */
+      COALESCE(
+        json_agg(
+          DISTINCT jsonb_build_object(
+            'user_id', ud.user_id
+          )
+        ) FILTER (WHERE ud.user_id IS NOT NULL),
+        '[]'
+      ) AS assigned_users,
+
+      /* Segments */
+      COALESCE(
+        json_agg(
+          DISTINCT jsonb_build_object(
+            'id', s.id,
+            'name', s.name
+          )
+        ) FILTER (WHERE s.id IS NOT NULL),
+        '[]'
+      ) AS segments
+
+    FROM discounts d
+    LEFT JOIN user_discounts ud
+      ON ud.discount_id = d.id
+    LEFT JOIN discount_segments ds
+      ON ds.discount_id = d.id
+    LEFT JOIN segments s
+      ON s.id = ds.segment_id
+
+    WHERE d.type = 'MANUAL'
+    GROUP BY d.id
+    ORDER BY d.created_at DESC;
+  `;
+
+  const { rows } = await pool.query(query);
+  return rows;
 };
 
 module.exports = {
@@ -261,5 +297,5 @@ module.exports = {
   toggleDiscountStatus,
   listDiscountActivities,
   deleteDiscountById,
-  getUserByCoupon,
+  listManualDiscountsWithUsers,
 };
