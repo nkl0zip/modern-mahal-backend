@@ -437,23 +437,33 @@ const getAllProductsHandler = async (req, res, next) => {
 
 const searchProductsHandler = async (req, res, next) => {
   try {
-    const { name, code } = req.query;
-    if (!name && !code) {
+    const { search } = req.query;
+
+    if (!search || !search.trim()) {
       return res.status(400).json({
-        message: "Please provide a product name or product code to search.",
+        message:
+          "Please provide a product name, product code, or variant sub-code to search.",
       });
     }
-    const products = await searchProducts({ name, code });
+
+    const products = await searchProducts({
+      search: search.trim(),
+    });
+
     if (!products || products.length === 0) {
       return res.status(404).json({
-        message: "No product exists with such name/code. Try something else.",
+        message:
+          "No product exists with such name, product code, or sub-code. Try something else.",
         products: [],
       });
     }
-    res
-      .status(200)
-      .json({ message: "Products fetched successfully.", products });
+
+    res.status(200).json({
+      message: "Products fetched successfully.",
+      products,
+    });
   } catch (err) {
+    console.error("Search Products Error:", err);
     next(err);
   }
 };
@@ -741,7 +751,7 @@ const updateProductHandler = async (req, res, next) => {
     if (brand_id) {
       const brandCheck = await pool.query(
         "SELECT id FROM brands WHERE id = $1",
-        [brand_id]
+        [brand_id],
       );
       if (brandCheck.rows.length === 0) {
         return res.status(400).json({ message: "Invalid brand_id provided" });
@@ -771,7 +781,7 @@ const updateProductHandler = async (req, res, next) => {
       if (categoryIds.length > 0) {
         const { rows } = await pool.query(
           "SELECT id FROM categories WHERE id = ANY($1)",
-          [categoryIds]
+          [categoryIds],
         );
         if (rows.length !== categoryIds.length) {
           return res.status(400).json({
@@ -789,7 +799,7 @@ const updateProductHandler = async (req, res, next) => {
       if (segmentIds.length > 0) {
         const { rows } = await pool.query(
           "SELECT id FROM segments WHERE id = ANY($1)",
-          [segmentIds]
+          [segmentIds],
         );
         if (rows.length !== segmentIds.length) {
           return res.status(400).json({
@@ -845,7 +855,7 @@ const softDeleteProductHandler = async (req, res, next) => {
     // Check if already all variants are DISCONTINUED
     const { rows: variants } = await pool.query(
       "SELECT COUNT(*) as total, COUNT(*) FILTER (WHERE status != 'DISCONTINUED') as active FROM product_variants WHERE product_id = $1",
-      [id]
+      [id],
     );
 
     if (parseInt(variants[0].active) === 0) {
@@ -899,7 +909,7 @@ const hardDeleteProductHandler = async (req, res, next) => {
          FROM cart_items ci
          JOIN product_variants pv ON ci.variant_id = pv.id
          WHERE pv.product_id = $1`,
-        [id]
+        [id],
       );
 
       if (parseInt(cartCheck.rows[0].count) > 0) {

@@ -56,7 +56,7 @@ router.get("/", getAllProductsHandler);
 // GET /api/products/category?name=xyz&page=1 OR ?id=uuid&page=1
 router.get("/category", getProductsByCategoryHandler);
 
-// GET /api/products/search?name= or /api/products/search?code=
+// GET /api/products/search?search=
 router.get("/search", searchProductsHandler);
 
 // POST /api/products/
@@ -68,7 +68,7 @@ router.post("/", createSingleProductHandler);
 router.get(
   "/brands/:id",
   optionalAuthenticateToken,
-  getBrandsProductListHandler
+  getBrandsProductListHandler,
 );
 
 // Fuzzy Search GET /api/products/list?name=xyz&page=1&limit=20
@@ -86,7 +86,7 @@ router.post("/:productId/variants", createVariantHandler);
 router.get(
   "/overview",
   optionalAuthenticateToken,
-  getProductOverviewPaginatedHandler
+  getProductOverviewPaginatedHandler,
 );
 
 // Allowed for all roles
@@ -124,7 +124,7 @@ router.delete(
   "/:id",
   authenticateToken,
   requireRole("ADMIN"),
-  hardDeleteProductHandler
+  hardDeleteProductHandler,
 );
 
 module.exports = router;

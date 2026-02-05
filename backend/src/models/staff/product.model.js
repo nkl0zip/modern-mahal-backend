@@ -336,47 +336,117 @@ async function getProductDetailsById(productId) {
 }
 
 /**
- * Search products by product name (like) or by product_code (exact).
- * Returns product-level info with a small 'variants' preview (first variant).
+ * Search products by:
+ * - product name (fuzzy)
+ * - product_code (exact + fuzzy)
+ * - variant sub_code (exact + fuzzy)
+ *
+ * Behaviour:
+ * - product_code → all variants
+ * - full sub_code → only that variant
+ * - name → product + primary variant
  */
-async function searchProducts({ name, code }) {
-  let whereClause = "";
-  let values = [];
+async function searchProducts({ search }) {
+  if (!search) return [];
 
-  if (code) {
-    whereClause = "WHERE p.product_code = $1";
-    values = [code];
-  } else if (name) {
-    whereClause = "WHERE LOWER(p.name) LIKE $1";
-    values = [`%${name.toLowerCase()}%`];
-  }
+  const fuzzy = `%${search.toLowerCase()}%`;
 
   const query = `
+    WITH matched_products AS (
+      SELECT DISTINCT
+        p.id,
+        p.name,
+        p.product_code,
+        p.description,
+        p.brand_id,
+
+        CASE
+          WHEN LOWER(p.product_code) = LOWER($1) THEN 'PRODUCT_CODE_EXACT'
+          WHEN LOWER(v.sub_code) = LOWER($1) THEN 'SUB_CODE_EXACT'
+          WHEN LOWER(p.product_code) ILIKE $2 THEN 'PRODUCT_CODE_FUZZY'
+          WHEN LOWER(v.sub_code) ILIKE $2 THEN 'SUB_CODE_FUZZY'
+          ELSE 'NAME'
+        END AS match_type
+
+      FROM products p
+      LEFT JOIN product_variants v ON v.product_id = p.id
+      WHERE
+        LOWER(p.name) ILIKE $2
+        OR LOWER(p.product_code) = LOWER($1)
+        OR LOWER(p.product_code) ILIKE $2
+        OR LOWER(v.sub_code) = LOWER($1)
+        OR LOWER(v.sub_code) ILIKE $2
+    )
+
     SELECT
-      p.id,
-      p.name AS product_name,
+      mp.id,
+      mp.name AS product_name,
       b.name AS brand,
-      p.product_code,
-      p.description,
+      mp.product_code,
+      mp.description,
+
+      CASE
+        WHEN mp.match_type = 'PRODUCT_CODE_EXACT' THEN (
+          SELECT json_agg(
+            jsonb_build_object(
+              'id', v.id,
+              'sub_code', v.sub_code,
+              'mrp', v.mrp,
+              'colour', (SELECT name FROM colours WHERE id = v.colour_id),
+              'finish', (SELECT name FROM finishes WHERE id = v.finish_id)
+            )
+            ORDER BY v.created_at ASC
+          )
+          FROM product_variants v
+          WHERE v.product_id = mp.id
+        )
+
+        WHEN mp.match_type = 'SUB_CODE_EXACT' THEN (
+          SELECT json_agg(
+            jsonb_build_object(
+              'id', v.id,
+              'sub_code', v.sub_code,
+              'mrp', v.mrp,
+              'colour', (SELECT name FROM colours WHERE id = v.colour_id),
+              'finish', (SELECT name FROM finishes WHERE id = v.finish_id)
+            )
+          )
+          FROM product_variants v
+          WHERE LOWER(v.sub_code) = LOWER($1)
+        )
+
+        ELSE (
+          SELECT json_agg(
+            jsonb_build_object(
+              'id', v.id,
+              'sub_code', v.sub_code,
+              'mrp', v.mrp,
+              'colour', (SELECT name FROM colours WHERE id = v.colour_id),
+              'finish', (SELECT name FROM finishes WHERE id = v.finish_id)
+            )
+            ORDER BY v.created_at ASC
+          )
+          FROM product_variants v
+          WHERE v.product_id = mp.id
+          LIMIT 1
+        )
+      END AS variants,
+
       (
-        SELECT jsonb_build_object(
-          'id', v.id,
-          'sub_code', v.sub_code,
-          'mrp', v.mrp,
-          'colour', (SELECT name FROM colours WHERE id = v.colour_id),
-          'finish', (SELECT name FROM finishes WHERE id = v.finish_id)
-        ) FROM product_variants v WHERE v.product_id = p.id ORDER BY v.created_at ASC LIMIT 1
-      ) AS primary_variant,
-      (
-        SELECT pi.media_url FROM products_image pi WHERE pi.product_id = p.id AND pi.display_order = 1 LIMIT 1
+        SELECT pi.media_url
+        FROM products_image pi
+        WHERE pi.product_id = mp.id
+          AND pi.display_order = 1
+        LIMIT 1
       ) AS product_image
-    FROM products p
-    LEFT JOIN brands b ON p.brand_id = b.id
-    ${whereClause}
-    ORDER BY p.created_at DESC;
+
+    FROM matched_products mp
+    LEFT JOIN brands b ON b.id = mp.brand_id
+    ORDER BY mp.name ASC;
   `;
-  const result = await pool.query(query, values);
-  return result.rows;
+
+  const { rows } = await pool.query(query, [search, fuzzy]);
+  return rows;
 }
 
 /**
