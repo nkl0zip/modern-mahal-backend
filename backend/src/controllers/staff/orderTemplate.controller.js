@@ -57,7 +57,7 @@ const createOrderTemplateHandler = async (req, res, next) => {
       // Validate that the provided user_id exists and is a USER role (not staff/admin)
       const userCheck = await pool.query(
         `SELECT id, role FROM users WHERE id = $1`,
-        [user_id]
+        [user_id],
       );
 
       if (userCheck.rows.length === 0) {
@@ -151,6 +151,9 @@ const getTemplateDetailsHandler = async (req, res, next) => {
         .json({ message: "Template not found or access denied" });
     }
 
+    // Get template user & staff details
+    const details = await getTemplateById(template_id);
+
     // Get template items
     const items = await getTemplateItems(template_id);
 
@@ -166,7 +169,7 @@ const getTemplateDetailsHandler = async (req, res, next) => {
     return res.status(200).json({
       message: "Template details fetched successfully",
       template: {
-        ...template,
+        ...details,
         items,
         chats,
         unread_messages: unreadCount,
@@ -213,7 +216,7 @@ const updateTemplateHandler = async (req, res, next) => {
       if (!allowedStatuses.includes(status)) {
         return res.status(400).json({
           message: `Invalid status. Allowed values: ${allowedStatuses.join(
-            ", "
+            ", ",
           )}`,
         });
       }
