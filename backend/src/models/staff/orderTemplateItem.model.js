@@ -33,7 +33,7 @@ const addItemToTemplate = async ({
       unit_price_snapshot,
       added_by,
       notes,
-    ]
+    ],
   );
   return rows[0];
 };
@@ -70,7 +70,7 @@ const getTemplateItems = async (template_id) => {
     WHERE oti.template_id = $1
     ORDER BY oti.added_at DESC;
     `,
-    [template_id]
+    [template_id],
   );
   return rows;
 };
@@ -88,7 +88,7 @@ const updateItemQuantity = async (item_id, quantity) => {
     WHERE id = $1 AND status = 'ACTIVE'
     RETURNING *;
     `,
-    [item_id, quantity]
+    [item_id, quantity],
   );
   return rows[0] || null;
 };
@@ -107,24 +107,24 @@ const updateItemStatus = async (item_id, status, notes = null) => {
     WHERE id = $1
     RETURNING *;
     `,
-    [item_id, status, notes]
+    [item_id, status, notes],
   );
   return rows[0] || null;
 };
 
 /**
- * Remove item from template
+ * Remove item from template (hard delete)
  */
 const removeItemFromTemplate = async (item_id) => {
   const { rows } = await pool.query(
     `
-    UPDATE order_template_items
-    SET status = 'CANCELLED'
+    DELETE FROM order_template_items
     WHERE id = $1
     RETURNING *;
     `,
-    [item_id]
+    [item_id],
   );
+
   return rows[0] || null;
 };
 
@@ -163,7 +163,7 @@ const getItemWithDetails = async (item_id) => {
     WHERE oti.id = $1
     LIMIT 1;
     `,
-    [item_id]
+    [item_id],
   );
   return rows[0] || null;
 };
