@@ -457,26 +457,16 @@ const initializeSocket = (server) => {
 
   // Create Socket.io server
   const io = new Server(server, {
-    cors: {
-      origin: (origin, callback) => {
-        // Allow all origins - Render handles this at the proxy level
-        callback(null, true);
-      },
-      credentials: true,
-      methods: ["GET", "POST", "OPTIONS"],
-      allowedHeaders: ["Authorization", "Content-Type"],
-    },
-    // IMPORTANT: polling first for Render compatibility, then upgrade to websocket
-    transports: ["polling", "websocket"],
-    pingTimeout: 60000, // Increase from default 5000
-    pingInterval: 25000, // Increase from default 25000
-    connectTimeout: 45000, // Increase connection timeout
-    allowEIO3: true, // Allow Engine.IO v3 clients (backward compatibility)
-    maxHttpBufferSize: 1e6, // 1MB max message size
-    perMessageDeflate: {
-      threshold: 1024, // Only compress messages > 1KB
-    },
-  });
+  cors: {
+    origin: (origin, callback) => callback(null, true),
+    credentials: true,
+  },
+  // IMPORTANT: WebSocket first, polling as fallback
+  transports: ["websocket", "polling"],
+  allowUpgrades: false,  // Don't allow transport upgrades (forces WebSocket to work immediately)
+  pingTimeout: 60000,
+  pingInterval: 25000,
+});
 
   // Create SocketManager instance
   socketManager = new SocketManager(io);
