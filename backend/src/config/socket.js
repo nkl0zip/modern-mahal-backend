@@ -58,7 +58,7 @@ class SocketManager {
           const hasAccess = await checkTemplateAccess(
             templateId,
             socket.userId,
-            socket.userRole
+            socket.userRole,
           );
 
           if (!hasAccess) {
@@ -141,7 +141,7 @@ class SocketManager {
           const template = await checkTemplateAccess(
             template_id,
             socket.userId,
-            socket.userRole
+            socket.userRole,
           );
 
           if (!template) {
@@ -213,7 +213,7 @@ class SocketManager {
             WHERE otc.id = $1
             LIMIT 1;
             `,
-            [chatMessage.id]
+            [chatMessage.id],
           );
 
           const fullMessage = rows[0];
@@ -284,7 +284,7 @@ class SocketManager {
           const template = await checkTemplateAccess(
             template_id,
             socket.userId,
-            socket.userRole
+            socket.userRole,
           );
 
           if (!template) {
@@ -310,7 +310,7 @@ class SocketManager {
                 AND is_read = false
                 AND deleted_at IS NULL
               `,
-              [message_ids, template_id, socket.userId]
+              [message_ids, template_id, socket.userId],
             );
             updatedCount = rowCount;
           } else {
@@ -353,7 +353,7 @@ class SocketManager {
 
           const deletedMessage = await deleteChatMessage(
             message_id,
-            socket.userId
+            socket.userId,
           );
 
           if (!deletedMessage) {
@@ -386,7 +386,7 @@ class SocketManager {
       // Handle disconnect
       socket.on("disconnect", () => {
         console.log(
-          `Socket disconnected: ${socket.id} - User: ${socket.userId}`
+          `Socket disconnected: ${socket.id} - User: ${socket.userId}`,
         );
 
         // Remove from userSockets
@@ -459,23 +459,23 @@ const initializeSocket = (server) => {
   const io = new Server(server, {
     cors: {
       origin: (origin, callback) => {
-        // Allow all origins in development, restrict in production
-        if (process.env.NODE_ENV === "production") {
-          const allowedOrigins = process.env.ALLOWED_ORIGINS
-            ? process.env.ALLOWED_ORIGINS.split(",")
-            : [];
-          if (allowedOrigins.indexOf(origin) !== -1 || !origin) {
-            callback(null, true);
-          } else {
-            callback(new Error("Not allowed by CORS"));
-          }
-        } else {
-          callback(null, true);
-        }
+        // Allow all origins - Render handles this at the proxy level
+        callback(null, true);
       },
       credentials: true,
+      methods: ["GET", "POST", "OPTIONS"],
+      allowedHeaders: ["Authorization", "Content-Type"],
     },
-    transports: ["websocket", "polling"],
+    // IMPORTANT: polling first for Render compatibility, then upgrade to websocket
+    transports: ["polling", "websocket"],
+    pingTimeout: 60000, // Increase from default 5000
+    pingInterval: 25000, // Increase from default 25000
+    connectTimeout: 45000, // Increase connection timeout
+    allowEIO3: true, // Allow Engine.IO v3 clients (backward compatibility)
+    maxHttpBufferSize: 1e6, // 1MB max message size
+    perMessageDeflate: {
+      threshold: 1024, // Only compress messages > 1KB
+    },
   });
 
   // Create SocketManager instance
@@ -487,7 +487,7 @@ const initializeSocket = (server) => {
 const getSocketManager = () => {
   if (!socketManager) {
     throw new Error(
-      "Socket manager not initialized. Call initializeSocket first."
+      "Socket manager not initialized. Call initializeSocket first.",
     );
   }
   return socketManager;
@@ -496,7 +496,7 @@ const getSocketManager = () => {
 const getIO = () => {
   if (!socketManager) {
     throw new Error(
-      "Socket manager not initialized. Call initializeSocket first."
+      "Socket manager not initialized. Call initializeSocket first.",
     );
   }
   return socketManager.io;
