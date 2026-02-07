@@ -46,32 +46,78 @@ const getTemplateItems = async (template_id) => {
     `
     SELECT 
       oti.*,
-      p.name as product_name,
+
+      p.name AS product_name,
       p.product_code,
+
       pv.sub_code,
-      pv.mrp as current_mrp,
-      cl.name as colour_name,
-      f.name as finish_name,
-      pi.media_url as product_image,
-      b.name as brand_name
+      pv.mrp AS current_mrp,
+
+      cl.name AS colour_name,
+      f.name AS finish_name,
+      b.name AS brand_name,
+
+      pi.media_url AS product_image,
+
+      /* Product segments */
+      COALESCE(
+        json_agg(
+          DISTINCT jsonb_build_object(
+            'id', s.id,
+            'name', s.name
+          )
+        ) FILTER (WHERE s.id IS NOT NULL),
+        '[]'
+      ) AS segments
+
     FROM order_template_items oti
-    JOIN products p ON oti.product_id = p.id
-    LEFT JOIN product_variants pv ON oti.variant_id = pv.id
-    LEFT JOIN colours cl ON pv.colour_id = cl.id
-    LEFT JOIN finishes f ON pv.finish_id = f.id
-    LEFT JOIN brands b ON p.brand_id = b.id
+
+    JOIN products p 
+      ON oti.product_id = p.id
+
+    LEFT JOIN product_variants pv 
+      ON oti.variant_id = pv.id
+
+    LEFT JOIN colours cl 
+      ON pv.colour_id = cl.id
+
+    LEFT JOIN finishes f 
+      ON pv.finish_id = f.id
+
+    LEFT JOIN brands b 
+      ON p.brand_id = b.id
+
+    /* Product image (product or variant level) */
     LEFT JOIN LATERAL (
       SELECT media_url 
       FROM products_image 
-      WHERE (product_id = p.id OR variant_id = pv.id) 
-        AND display_order = 1 
+      WHERE (product_id = p.id OR variant_id = pv.id)
+        AND display_order = 1
       LIMIT 1
     ) pi ON true
+
+    /* Product segments */
+    LEFT JOIN product_segments ps
+      ON ps.product_id = p.id
+    LEFT JOIN segments s
+      ON s.id = ps.segment_id
+
     WHERE oti.template_id = $1
+
+    GROUP BY
+      oti.id,
+      p.id,
+      pv.id,
+      cl.id,
+      f.id,
+      b.id,
+      pi.media_url
+
     ORDER BY oti.added_at DESC;
     `,
     [template_id],
   );
+
   return rows;
 };
 
