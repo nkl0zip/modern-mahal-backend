@@ -60,13 +60,13 @@ const addDiscountSegments = async (discountId, segmentIds = []) => {
 /**
  * Attach MANUAL discount to a user
  */
-const assignDiscountToUser = async (discountId, userId) => {
+const assignDiscountToUser = async (discountId, userId, templateId = null) => {
   const query = `
-    INSERT INTO user_discounts (discount_id, user_id)
-    VALUES ($1, $2)
+    INSERT INTO user_discounts (discount_id, user_id, template_id)
+    VALUES ($1, $2, $3)
     ON CONFLICT DO NOTHING;
   `;
-  await pool.query(query, [discountId, userId]);
+  await pool.query(query, [discountId, userId, templateId]);
 };
 
 /**
@@ -246,11 +246,12 @@ const listManualDiscountsWithUsers = async () => {
     SELECT
       d.*,
 
-      /* Assigned users */
+      /* Assigned users + template */
       COALESCE(
         json_agg(
           DISTINCT jsonb_build_object(
-            'user_id', ud.user_id
+            'user_id', ud.user_id,
+            'template_id', ud.template_id
           )
         ) FILTER (WHERE ud.user_id IS NOT NULL),
         '[]'
@@ -268,12 +269,9 @@ const listManualDiscountsWithUsers = async () => {
       ) AS segments
 
     FROM discounts d
-    LEFT JOIN user_discounts ud
-      ON ud.discount_id = d.id
-    LEFT JOIN discount_segments ds
-      ON ds.discount_id = d.id
-    LEFT JOIN segments s
-      ON s.id = ds.segment_id
+    LEFT JOIN user_discounts ud ON ud.discount_id = d.id
+    LEFT JOIN discount_segments ds ON ds.discount_id = d.id
+    LEFT JOIN segments s ON s.id = ds.segment_id
 
     WHERE d.type = 'MANUAL'
     GROUP BY d.id
@@ -282,6 +280,16 @@ const listManualDiscountsWithUsers = async () => {
 
   const { rows } = await pool.query(query);
   return rows;
+};
+
+const deleteManualDiscountById = async (discountId) => {
+  const query = `
+    DELETE FROM discounts
+    WHERE id = $1 AND type = 'MANUAL'
+    RETURNING *;
+  `;
+  const { rows } = await pool.query(query, [discountId]);
+  return rows[0] || null;
 };
 
 module.exports = {
@@ -298,4 +306,5 @@ module.exports = {
   listDiscountActivities,
   deleteDiscountById,
   listManualDiscountsWithUsers,
+  deleteManualDiscountById,
 };

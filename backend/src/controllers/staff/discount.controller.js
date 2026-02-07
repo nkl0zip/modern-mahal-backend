@@ -10,6 +10,7 @@ const {
   updateDiscount,
   deleteDiscountById,
   listManualDiscountsWithUsers,
+  deleteManualDiscountById,
 } = require("../../models/staff/discount.model");
 
 /**
@@ -66,6 +67,7 @@ const createManualDiscountHandler = async (req, res) => {
   try {
     const {
       user_id,
+      template_id = null,
       discount_mode,
       value,
       expires_at,
@@ -85,7 +87,7 @@ const createManualDiscountHandler = async (req, res) => {
       created_by_role: req.user.role,
     });
 
-    await assignDiscountToUser(discount.id, user_id);
+    await assignDiscountToUser(discount.id, user_id, template_id);
     await addDiscountSegments(discount.id, segment_ids);
 
     await logDiscountActivity({
@@ -102,7 +104,7 @@ const createManualDiscountHandler = async (req, res) => {
       discount,
     });
   } catch (err) {
-    console.error("Create Manual Discount Error: ", err);
+    console.error("Create Manual Discount Error:", err);
     res.status(500).json({ message: "Failed to create manual discount" });
   }
 };
@@ -266,6 +268,37 @@ const deleteCouponDiscountHandler = async (req, res) => {
   }
 };
 
+const deleteManualDiscountHandler = async (req, res) => {
+  try {
+    const { discount_id } = req.params;
+
+    const existing = await getDiscountById(discount_id);
+    if (!existing || existing.type !== "MANUAL") {
+      return res.status(404).json({ message: "Manual discount not found" });
+    }
+
+    await logDiscountActivity({
+      discountId: discount_id,
+      action_type: "DELETED",
+      performed_by: req.user.id,
+      performed_by_role: req.user.role,
+      affected_user_id: null,
+      old_value: existing,
+      new_value: null,
+    });
+
+    const deleted = await deleteManualDiscountById(discount_id);
+
+    res.status(200).json({
+      message: "Manual discount deleted successfully",
+      discount: deleted,
+    });
+  } catch (err) {
+    console.error("Delete Manual Discount Error:", err);
+    res.status(500).json({ message: "Failed to delete manual discount" });
+  }
+};
+
 module.exports = {
   createCouponDiscountHandler,
   createManualDiscountHandler,
@@ -275,4 +308,5 @@ module.exports = {
   updateCouponDiscountHandler,
   listActivitiesHandler,
   deleteCouponDiscountHandler,
+  deleteManualDiscountHandler,
 };
