@@ -74,6 +74,7 @@ const assignDiscountToUser = async (discountId, userId, templateId = null) => {
  */
 const logDiscountActivity = async ({
   discountId,
+  discount_id,
   action_type,
   performed_by,
   performed_by_role,
@@ -81,6 +82,12 @@ const logDiscountActivity = async ({
   old_value = null,
   new_value = null,
 }) => {
+  const finalDiscountId = discount_id || discountId;
+
+  if (!finalDiscountId) {
+    throw new Error("logDiscountActivity: discount_id is required");
+  }
+
   const query = `
     INSERT INTO discount_activity_logs (
       discount_id,
@@ -95,7 +102,7 @@ const logDiscountActivity = async ({
   `;
 
   await pool.query(query, [
-    discountId,
+    finalDiscountId,
     action_type,
     performed_by,
     performed_by_role,
@@ -292,6 +299,42 @@ const deleteManualDiscountById = async (discountId) => {
   return rows[0] || null;
 };
 
+/**
+ * Get manual discounts assigned to a template
+ */
+const getTemplateManualDiscounts = async (template_id, user_id) => {
+  const query = `
+    SELECT
+      d.*,
+      COALESCE(
+        json_agg(
+          DISTINCT jsonb_build_object(
+            'id', s.id,
+            'name', s.name
+          )
+        ) FILTER (WHERE s.id IS NOT NULL),
+        '[]'
+      ) AS segments
+    FROM discounts d
+    JOIN user_discounts ud ON ud.discount_id = d.id
+    LEFT JOIN discount_segments ds ON ds.discount_id = d.id
+    LEFT JOIN segments s ON s.id = ds.segment_id
+    WHERE d.type = 'MANUAL'
+      AND d.is_active = true
+      AND d.expires_at > NOW()
+      AND ud.user_id = $2
+      AND (
+        ud.template_id = $1
+        OR ud.template_id IS NULL
+      )
+    GROUP BY d.id
+    ORDER BY d.created_at DESC;
+  `;
+
+  const { rows } = await pool.query(query, [template_id, user_id]);
+  return rows;
+};
+
 module.exports = {
   createDiscount,
   addDiscountSegments,
@@ -307,4 +350,5 @@ module.exports = {
   deleteDiscountById,
   listManualDiscountsWithUsers,
   deleteManualDiscountById,
+  getTemplateManualDiscounts,
 };

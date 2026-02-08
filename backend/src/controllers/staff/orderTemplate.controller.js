@@ -12,12 +12,16 @@ const {
 
 const {
   getTemplateItems,
-  addItemToTemplate,
-  updateItemQuantity,
-  updateItemStatus,
-  removeItemFromTemplate,
-  getItemWithDetails,
 } = require("../../models/staff/orderTemplateItem.model");
+
+const {
+  getTemplateManualDiscounts,
+} = require("../../models/staff/discount.model");
+
+const {
+  applyTemplateDiscounts,
+  calculateTemplateTotals,
+} = require("../../services/discount.service");
 
 const {
   addChatMessage,
@@ -166,11 +170,28 @@ const getTemplateDetailsHandler = async (req, res, next) => {
     // Get unread count
     const unreadCount = await getUnreadMessageCount(template_id, user_id);
 
+    // Fetch template-level discounts
+    const templateDiscounts = await getTemplateManualDiscounts(
+      template_id,
+      details.user_id,
+    );
+
+    // Apply discounts to items
+    const { items: discountedItems, applied_discounts } =
+      applyTemplateDiscounts(items, templateDiscounts);
+
+    const { total_original_cost, total_cost, total_discount_amount } =
+      calculateTemplateTotals(discountedItems);
+
     return res.status(200).json({
       message: "Template details fetched successfully",
       template: {
         ...details,
-        items,
+        total_original_cost,
+        total_discount_amount,
+        total_cost,
+        items: discountedItems,
+        discounts: applied_discounts,
         chats,
         unread_messages: unreadCount,
       },
