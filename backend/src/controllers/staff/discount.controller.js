@@ -1,3 +1,4 @@
+const pool = require("../../config/db");
 const {
   createDiscount,
   addDiscountSegments,
@@ -12,6 +13,9 @@ const {
   listManualDiscountsWithUsers,
   deleteManualDiscountById,
 } = require("../../models/staff/discount.model");
+
+const { getValidCouponByCode } = require("../../models/staff/discount.model");
+const { recalculateCart } = require("../../services/cartPricing.service");
 
 /**
  * ADMIN / STAFF can only create coupon discount
@@ -299,6 +303,64 @@ const deleteManualDiscountHandler = async (req, res) => {
   }
 };
 
+const applyCouponHandler = async (req, res, next) => {
+  try {
+    const { coupon_code } = req.body;
+    const user_id = req.user.id;
+
+    const coupon = await getValidCouponByCode(coupon_code);
+
+    if (!coupon) return res.status(400).json({ message: "Invalid coupon" });
+
+    const { rows } = await pool.query(
+      `SELECT * FROM cart WHERE user_id = $1 LIMIT 1`,
+      [user_id],
+    );
+
+    if (!rows.length)
+      return res.status(404).json({ message: "Cart not found" });
+
+    const cart = rows[0];
+
+    await pool.query(`UPDATE cart SET applied_coupon_id = $1 WHERE id = $2`, [
+      coupon.id,
+      cart.id,
+    ]);
+
+    const pricing = await recalculateCart(cart.id);
+
+    res.json({ message: "Coupon applied", pricing });
+  } catch (err) {
+    next(err);
+  }
+};
+
+const removeCouponHandler = async (req, res, next) => {
+  try {
+    const user_id = req.user.id;
+
+    const { rows } = await pool.query(
+      `SELECT * FROM cart WHERE user_id = $1 LIMIT 1`,
+      [user_id],
+    );
+
+    if (!rows.length)
+      return res.status(404).json({ message: "Cart not found" });
+
+    const cart = rows[0];
+
+    await pool.query(`UPDATE cart SET applied_coupon_id = NULL WHERE id = $1`, [
+      cart.id,
+    ]);
+
+    const pricing = await recalculateCart(cart.id);
+
+    res.json({ message: "Coupon removed", pricing });
+  } catch (err) {
+    next(err);
+  }
+};
+
 module.exports = {
   createCouponDiscountHandler,
   createManualDiscountHandler,
@@ -309,4 +371,6 @@ module.exports = {
   listActivitiesHandler,
   deleteCouponDiscountHandler,
   deleteManualDiscountHandler,
+  applyCouponHandler,
+  removeCouponHandler,
 };

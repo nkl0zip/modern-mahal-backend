@@ -11,6 +11,8 @@ const {
   listActivitiesHandler,
   deleteCouponDiscountHandler,
   deleteManualDiscountHandler,
+  applyCouponHandler,
+  removeCouponHandler,
 } = require("../../controllers/staff/discount.controller");
 
 const {
@@ -115,5 +117,17 @@ router.delete(
   requireRole(["ADMIN", "STAFF"]),
   deleteManualDiscountHandler,
 );
+
+/**
+ * Apply Coupon to Cart
+ * POST: /api/discount/apply-coupon
+ */
+router.post("/apply-coupon", authenticateToken, applyCouponHandler);
+
+/**
+ * Remove Coupon from Cart
+ * POST: /api/discount/remove-coupon
+ */
+router.post("/remove-coupon", authenticateToken, removeCouponHandler);
 
 module.exports = router;

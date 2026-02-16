@@ -1,11 +1,14 @@
 /**
  * Apply template-level manual discounts to template items
  */
-const applyTemplateDiscounts = (items, discounts) => {
+const applyTemplateDiscounts = (items = [], discounts = []) => {
+  if (!Array.isArray(items)) items = [];
+  if (!Array.isArray(discounts)) discounts = [];
+
   if (!discounts.length) {
     const updatedItems = items.map((item) => {
-      const unitPrice = Number(item.current_mrp);
-      const quantity = Number(item.quantity);
+      const unitPrice = Number(item.current_mrp || 0);
+      const quantity = Number(item.quantity || 0);
 
       return {
         ...item,
@@ -25,14 +28,30 @@ const applyTemplateDiscounts = (items, discounts) => {
     };
   }
 
-  const discount = discounts[0];
-  const discountSegmentIds = new Set(discount.segments.map((s) => s.id));
+  const discount = discounts[0] || null;
+
+  if (!discount) {
+    return {
+      items,
+      applied_discounts: [],
+    };
+  }
+
+  /* 🔥 SAFETY FIX */
+  const discountSegments = Array.isArray(discount.segments)
+    ? discount.segments
+    : [];
+
+  const discountSegmentIds = new Set(discountSegments.map((s) => s.id));
 
   const updatedItems = items.map((item) => {
-    const unitPrice = Number(item.current_mrp);
-    const quantity = Number(item.quantity);
+    const unitPrice = Number(item.current_mrp || 0);
+    const quantity = Number(item.quantity || 0);
 
-    const itemSegmentIds = item.segments.map((s) => s.id);
+    /* 🔥 SAFETY FIX */
+    const itemSegments = Array.isArray(item.segments) ? item.segments : [];
+
+    const itemSegmentIds = itemSegments.map((s) => s.id);
 
     const isApplicable =
       discountSegmentIds.size === 0 ||
@@ -51,9 +70,15 @@ const applyTemplateDiscounts = (items, discounts) => {
       };
     }
 
-    const discountAmountPerUnit = (unitPrice * Number(discount.value)) / 100;
+    let discountAmountPerUnit = 0;
 
-    const discountedUnitPrice = unitPrice - discountAmountPerUnit;
+    if (discount.discount_mode === "PERCENTAGE") {
+      discountAmountPerUnit = (unitPrice * Number(discount.value || 0)) / 100;
+    } else if (discount.discount_mode === "FLAT") {
+      discountAmountPerUnit = Number(discount.value || 0);
+    }
+
+    const discountedUnitPrice = Math.max(unitPrice - discountAmountPerUnit, 0);
 
     return {
       ...item,
@@ -61,7 +86,8 @@ const applyTemplateDiscounts = (items, discounts) => {
       original_total_price: (unitPrice * quantity).toFixed(2),
       discounted_mrp: discountedUnitPrice.toFixed(2),
       discounted_total_price: (discountedUnitPrice * quantity).toFixed(2),
-      discount_percentage: discount.value,
+      discount_percentage:
+        discount.discount_mode === "PERCENTAGE" ? discount.value : 0,
       discount_amount: discountAmountPerUnit.toFixed(2),
       total_discount_amount: (discountAmountPerUnit * quantity).toFixed(2),
     };
@@ -75,7 +101,7 @@ const applyTemplateDiscounts = (items, discounts) => {
         value: discount.value,
         discount_mode: discount.discount_mode,
         expires_at: discount.expires_at,
-        segments: discount.segments,
+        segments: discountSegments,
       },
     ],
   };

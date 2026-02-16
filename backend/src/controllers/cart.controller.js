@@ -1,3 +1,5 @@
+const pool = require("../config/db");
+
 const {
   findOrCreateCartByUser,
   getCartByUser,
@@ -7,6 +9,10 @@ const {
   removeCartItem,
   clearCart,
 } = require("../models/cart.model");
+
+const { getValidCouponByCode } = require("../models/staff/discount.model");
+
+const { applyCartPricingLogic } = require("../services/cartPricing.service");
 
 /* INIT CART */
 const initCartHandler = async (req, res, next) => {
@@ -25,15 +31,68 @@ const initCartHandler = async (req, res, next) => {
 const getCartHandler = async (req, res, next) => {
   try {
     const user_id = req.user.id;
-    const cart = await getCartByUser(user_id);
-    if (!cart) return res.status(404).json({ message: "Cart not found" });
 
-    const items = await getCartItemsWithProductDetails(cart.id);
-    const total = items.reduce((a, b) => a + Number(b.subtotal || 0), 0);
+    const cart = await findOrCreateCartByUser(user_id);
 
-    res.json({
+    const rawItems = await getCartItemsWithProductDetails(cart.id);
+
+    if (!rawItems.length) {
+      return res.json({
+        message: "Cart fetched",
+        cart: {
+          ...cart,
+          items: [],
+          total_original_cost: 0,
+          total_discount_amount: 0,
+          final_total: 0,
+          applied_coupon: null,
+        },
+      });
+    }
+
+    /* -----------------------------------------
+       Fetch Applied Coupon By ID (CORRECT FIX)
+    ------------------------------------------ */
+    let coupon = null;
+
+    if (cart.applied_coupon_id) {
+      const { rows } = await pool.query(
+        `
+        SELECT *
+        FROM discounts
+        WHERE id = $1
+          AND type = 'COUPON'
+          AND is_active = true
+          AND expires_at > NOW()
+        LIMIT 1;
+        `,
+        [cart.applied_coupon_id],
+      );
+
+      if (rows.length) {
+        coupon = rows[0];
+      }
+    }
+
+    /* -----------------------------------------
+       Apply Pricing Logic
+    ------------------------------------------ */
+    const pricing = await applyCartPricingLogic({
+      items: rawItems,
+      coupon,
+      user_id,
+    });
+
+    return res.json({
       message: "Cart fetched",
-      cart: { ...cart, items, total, final_total: total },
+      cart: {
+        ...cart,
+        items: pricing.items,
+        total_original_cost: pricing.total_original_cost,
+        total_discount_amount: pricing.total_discount_amount,
+        final_total: pricing.final_total,
+        applied_coupon: pricing.applied_coupon,
+      },
     });
   } catch (err) {
     next(err);

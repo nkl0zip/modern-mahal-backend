@@ -7,6 +7,7 @@ const {
   deleteTemplateHandler,
   finalizeTemplateHandler,
   assignStaffHandler,
+  moveTemplateToCartHandler,
 } = require("../../controllers/staff/orderTemplate.controller");
 
 const {
@@ -54,6 +55,7 @@ router.post(
   requireRole(["STAFF", "ADMIN"]),
   assignStaffHandler,
 );
+router.post("/:template_id/move-to-cart", moveTemplateToCartHandler);
 
 // Template Items Routes
 router.get("/:template_id/items", getTemplateItemsHandler);

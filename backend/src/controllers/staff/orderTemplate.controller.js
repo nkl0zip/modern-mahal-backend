@@ -24,6 +24,10 @@ const {
 } = require("../../services/discount.service");
 
 const {
+  moveTemplateItemsToCart,
+} = require("../../services/templateToCart.service");
+
+const {
   addChatMessage,
   getTemplateChats,
   markMessagesAsRead,
@@ -436,6 +440,28 @@ const assignStaffHandler = async (req, res, next) => {
   }
 };
 
+const moveTemplateToCartHandler = async (req, res, next) => {
+  try {
+    const { template_id } = req.params;
+    const { mode } = req.body; // "COMBINE" or "REPLACE"
+
+    const user_id = req.user.id;
+
+    const result = await moveTemplateItemsToCart({
+      template_id,
+      user_id,
+      mode,
+    });
+
+    return res.status(200).json({
+      message: "Template moved to cart successfully",
+      result,
+    });
+  } catch (err) {
+    next(err);
+  }
+};
+
 module.exports = {
   createOrderTemplateHandler,
   getUserTemplatesHandler,
@@ -444,4 +470,5 @@ module.exports = {
   deleteTemplateHandler,
   finalizeTemplateHandler,
   assignStaffHandler,
+  moveTemplateToCartHandler,
 };
