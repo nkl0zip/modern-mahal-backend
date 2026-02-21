@@ -39,4 +39,76 @@ router.get(
   orderController.adminGetOrders,
 );
 
+// Admin/Staff only routes
+router.put(
+  "/admin/:orderId/status",
+  authenticateToken,
+  requireRole(["ADMIN", "STAFF"]),
+  [
+    body("status").isIn(["PENDING", "PAID", "FAILED", "CANCELLED", "REFUNDED"]),
+    body("reason").optional().isString(),
+  ],
+  orderController.updateOrderStatus,
+);
+
+router.get(
+  "/admin/:orderId/history",
+  authenticateToken,
+  requireRole(["ADMIN", "STAFF"]),
+  orderController.getOrderHistory,
+);
+
+router.post(
+  "/admin/:orderId/notes",
+  authenticateToken,
+  requireRole(["ADMIN", "STAFF"]),
+  [body("note").notEmpty(), body("isPrivate").optional().isBoolean()],
+  orderController.addOrderNote,
+);
+
+router.get(
+  "/admin/:orderId/notes",
+  authenticateToken,
+  requireRole(["ADMIN", "STAFF"]),
+  orderController.getOrderNotes,
+);
+
+router.get(
+  "/admin/:orderId/full",
+  authenticateToken,
+  requireRole(["ADMIN", "STAFF"]),
+  orderController.getFullOrder,
+);
+
+router.post(
+  "/admin/:orderId/refund",
+  authenticateToken,
+  requireRole(["ADMIN"]),
+  [
+    body("paymentId").isUUID(),
+    body("amount").isFloat({ min: 0.01 }),
+    body("reason").optional().isString(),
+  ],
+  orderController.initiateRefund,
+);
+
+// Return routes (user and admin)
+router.post(
+  "/:orderId/return",
+  authenticateToken,
+  [body("orderItemId").optional().isUUID(), body("reason").notEmpty()],
+  orderController.requestReturn,
+);
+
+router.put(
+  "/admin/returns/:returnId",
+  authenticateToken,
+  requireRole(["ADMIN", "STAFF"]),
+  [
+    body("status").isIn(["APPROVED", "REJECTED"]),
+    body("adminNotes").optional().isString(),
+  ],
+  orderController.processReturn,
+);
+
 module.exports = router;

@@ -234,20 +234,6 @@ const getOrdersByUser = async (userId, limit = 10, offset = 0) => {
 };
 
 /**
- * Update order status (used internally)
- */
-const updateOrderStatus = async (orderId, status) => {
-  const query = `
-    UPDATE orders
-    SET status = $1, updated_at = CURRENT_TIMESTAMP
-    WHERE id = $2
-    RETURNING *;
-  `;
-  const { rows } = await pool.query(query, [status, orderId]);
-  return rows[0];
-};
-
-/**
  * Admin: Get all orders with filters
  */
 const adminGetOrders = async (filters = {}, limit = 20, offset = 0) => {
@@ -305,10 +291,263 @@ const adminGetOrders = async (filters = {}, limit = 20, offset = 0) => {
   return rows;
 };
 
+/**
+ * Update order status and log history
+ */
+const updateOrderStatus = async (
+  orderId,
+  newStatus,
+  changedBy = null,
+  reason = null,
+) => {
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+
+    // Get current status
+    const { rows: current } = await client.query(
+      "SELECT status FROM orders WHERE id = $1 FOR UPDATE",
+      [orderId],
+    );
+    if (current.length === 0) throw new Error("Order not found");
+    const oldStatus = current[0].status;
+
+    // Update order
+    const updateQuery = `
+      UPDATE orders
+      SET status = $1, updated_at = CURRENT_TIMESTAMP
+      WHERE id = $2
+      RETURNING *;
+    `;
+    const { rows } = await client.query(updateQuery, [newStatus, orderId]);
+    const updatedOrder = rows[0];
+
+    // Insert into history
+    await client.query(
+      `INSERT INTO order_status_history (order_id, old_status, new_status, changed_by, reason)
+       VALUES ($1, $2, $3, $4, $5)`,
+      [orderId, oldStatus, newStatus, changedBy, reason],
+    );
+
+    await client.query("COMMIT");
+    return updatedOrder;
+  } catch (err) {
+    await client.query("ROLLBACK");
+    throw err;
+  } finally {
+    client.release();
+  }
+};
+
+/**
+ * Get order status history
+ */
+const getOrderStatusHistory = async (orderId) => {
+  const query = `
+    SELECT h.*, u.name as changed_by_name
+    FROM order_status_history h
+    LEFT JOIN users u ON h.changed_by = u.id
+    WHERE h.order_id = $1
+    ORDER BY h.created_at DESC;
+  `;
+  const { rows } = await pool.query(query, [orderId]);
+  return rows;
+};
+
+/**
+ * Add internal note to order
+ */
+const addOrderNote = async (orderId, authorId, note, isPrivate = true) => {
+  const query = `
+    INSERT INTO order_notes (order_id, author_id, note, is_private)
+    VALUES ($1, $2, $3, $4)
+    RETURNING *;
+  `;
+  const { rows } = await pool.query(query, [
+    orderId,
+    authorId,
+    note,
+    isPrivate,
+  ]);
+  return rows[0];
+};
+
+/**
+ * Get notes for an order (filter by private flag based on user role)
+ */
+const getOrderNotes = async (orderId, includePrivate = false) => {
+  let query = `SELECT n.*, u.name as author_name
+               FROM order_notes n
+               LEFT JOIN users u ON n.author_id = u.id
+               WHERE n.order_id = $1`;
+  if (!includePrivate) {
+    query += ` AND n.is_private = false`;
+  }
+  query += ` ORDER BY n.created_at DESC;`;
+  const { rows } = await pool.query(query, [orderId]);
+  return rows;
+};
+
+/**
+ * Create a return request
+ */
+const createReturnRequest = async (orderId, userId, orderItemId, reason) => {
+  const query = `
+    INSERT INTO order_returns (order_id, user_id, order_item_id, reason)
+    VALUES ($1, $2, $3, $4)
+    RETURNING *;
+  `;
+  const { rows } = await pool.query(query, [
+    orderId,
+    userId,
+    orderItemId,
+    reason,
+  ]);
+  return rows[0];
+};
+
+/**
+ * Update return request status (staff)
+ */
+const updateReturnStatus = async (
+  returnId,
+  status,
+  processedBy,
+  adminNotes = null,
+) => {
+  const query = `
+    UPDATE order_returns
+    SET status = $1,
+        processed_by = $2,
+        processed_at = CURRENT_TIMESTAMP,
+        admin_notes = COALESCE($3, admin_notes)
+    WHERE id = $4
+    RETURNING *;
+  `;
+  const { rows } = await pool.query(query, [
+    status,
+    processedBy,
+    adminNotes,
+    returnId,
+  ]);
+  return rows[0];
+};
+
+/**
+ * Get returns for an order
+ */
+const getOrderReturns = async (orderId) => {
+  const query = `
+    SELECT r.*, u.name as user_name, pb.name as processed_by_name
+    FROM order_returns r
+    LEFT JOIN users u ON r.user_id = u.id
+    LEFT JOIN users pb ON r.processed_by = pb.id
+    WHERE r.order_id = $1
+    ORDER BY r.requested_at DESC;
+  `;
+  const { rows } = await pool.query(query, [orderId]);
+  return rows;
+};
+
+/**
+ * Create a refund (initiated by staff)
+ */
+const createRefund = async (
+  paymentId,
+  orderId,
+  amount,
+  reason,
+  processedBy,
+  metadata = {},
+) => {
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+
+    // Insert refund record
+    const insertQuery = `
+      INSERT INTO refunds (payment_id, order_id, amount, reason, processed_by, metadata)
+      VALUES ($1, $2, $3, $4, $5, $6)
+      RETURNING *;
+    `;
+    const { rows } = await client.query(insertQuery, [
+      paymentId,
+      orderId,
+      amount,
+      reason,
+      processedBy,
+      metadata,
+    ]);
+    const refund = rows[0];
+
+    // Optionally, call payment gateway refund API here (if integrated)
+    // For now, just mark as processed
+    await client.query(
+      `UPDATE refunds SET status = 'PROCESSED', processed_at = CURRENT_TIMESTAMP WHERE id = $1`,
+      [refund.id],
+    );
+
+    // Update order status? Possibly to REFUNDED if full refund
+    // You might want to check if total refunded amount equals order grand_total
+
+    await client.query("COMMIT");
+    return refund;
+  } catch (err) {
+    await client.query("ROLLBACK");
+    throw err;
+  } finally {
+    client.release();
+  }
+};
+
+/**
+ * Get refunds for an order
+ */
+const getOrderRefunds = async (orderId) => {
+  const query = `
+    SELECT r.*, p.payment_gateway, p.gateway_transaction_id, u.name as processed_by_name
+    FROM refunds r
+    JOIN payments p ON r.payment_id = p.id
+    LEFT JOIN users u ON r.processed_by = u.id
+    WHERE r.order_id = $1
+    ORDER BY r.created_at DESC;
+  `;
+  const { rows } = await pool.query(query, [orderId]);
+  return rows;
+};
+
+// Also add a function to get a single order with all related data (history, notes, returns, refunds)
+const getFullOrderDetails = async (orderId) => {
+  const order = await getOrderById(orderId); // existing
+  if (!order) return null;
+  const [history, notes, returns, refunds] = await Promise.all([
+    getOrderStatusHistory(orderId),
+    getOrderNotes(orderId, true), // include private for internal use
+    getOrderReturns(orderId),
+    getOrderRefunds(orderId),
+  ]);
+  return {
+    ...order,
+    status_history: history,
+    notes,
+    returns,
+    refunds,
+  };
+};
+
 module.exports = {
   createOrderFromCart,
   getOrderById,
   getOrdersByUser,
   updateOrderStatus,
   adminGetOrders,
+  getOrderStatusHistory,
+  addOrderNote,
+  getOrderNotes,
+  createReturnRequest,
+  updateReturnStatus,
+  getOrderReturns,
+  createRefund,
+  getOrderRefunds,
+  getFullOrderDetails,
 };
