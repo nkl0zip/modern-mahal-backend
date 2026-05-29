@@ -28,6 +28,7 @@ const userDetailRoutes = require("./routes/staff/userDetails.routes");
 const discountRoutes = require("./routes/staff/discount.routes");
 const orderRoutes = require("./routes/order.routes");
 const paymentRoutes = require("./routes/payment.routes");
+const subAdminRoutes = require("./routes/sub-admin.routes");
 
 const errorHandler = require("./middlewares/error.middleware");
 
@@ -58,6 +59,7 @@ app.use("/api/cart", cartRoutes);
 app.use("/api/reviews", reviewRoutes);
 app.use("/api/admin", adminRoutes);
 app.use("/api/staff", staffRoutes);
+app.use("/api/sub-admin", subAdminRoutes);
 app.use("/api/admin/ips", adminIpRoutes);
 app.use("/api/tickets", ticketRoutes);
 app.use("/api/products/variant", productVariantRoutes);

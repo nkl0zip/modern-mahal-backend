@@ -19,7 +19,7 @@ const generateToken = (admin) => {
   return jwt.sign(
     { id: admin.id, email: admin.email, role: admin.role },
     process.env.JWT_SECRET,
-    { expiresIn: "1d" }
+    { expiresIn: "1d" },
   );
 };
 
@@ -75,7 +75,7 @@ const requestPasswordReset = async (req, res) => {
     await sendEmail(
       email,
       "Admin Password Reset",
-      `Click here to reset your password: ${resetLink}`
+      `Click here to reset your password: ${resetLink}`,
     );
 
     res
