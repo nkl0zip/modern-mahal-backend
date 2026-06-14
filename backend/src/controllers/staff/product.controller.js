@@ -27,6 +27,8 @@ const {
   updateProductSegments,
   softDeleteProduct,
   hardDeleteProduct,
+  getProductsByBrandAndSegment,
+  getSegmentsByBrand,
 } = require("../../models/staff/product.model");
 
 const { getProductReviewStats } = require("../../models/review.model");
@@ -941,6 +943,111 @@ const hardDeleteProductHandler = async (req, res, next) => {
   }
 };
 
+/**
+ * GET /api/products/brands/:brandId/segments
+ * Fetch all segments linked to a brand's products.
+ */
+const getBrandSegmentsHandler = async (req, res, next) => {
+  try {
+    const { brandId } = req.params;
+
+    if (!brandId) {
+      return res.status(400).json({ message: "Brand ID is required" });
+    }
+
+    // Optional: verify brand exists
+    const brandCheck = await pool.query("SELECT id FROM brands WHERE id = $1", [
+      brandId,
+    ]);
+    if (brandCheck.rows.length === 0) {
+      return res.status(404).json({ message: "Brand not found" });
+    }
+
+    const segments = await getSegmentsByBrand(brandId);
+
+    return res.status(200).json({
+      message: "Brand segments fetched successfully",
+      segments,
+    });
+  } catch (err) {
+    next(err);
+  }
+};
+
+/**
+ * GET /api/products/brands/:brandId/segments/:segmentId/products
+ * Fetch products of a brand filtered by a segment (paginated)
+ */
+const getProductsByBrandAndSegmentHandler = async (req, res, next) => {
+  try {
+    const { brandId, segmentId } = req.params;
+    const { page = 1, limit = 20 } = req.query;
+
+    if (!brandId || !segmentId) {
+      return res.status(400).json({
+        message: "Both brandId and segmentId are required",
+      });
+    }
+
+    const pageNum = parseInt(page, 10) || 1;
+    const limitNum = parseInt(limit, 10) || 20;
+
+    if (pageNum <= 0 || limitNum <= 0) {
+      return res.status(400).json({
+        message: "page and limit must be positive integers",
+      });
+    }
+
+    // Optional: verify brand exists
+    const brandCheck = await pool.query("SELECT id FROM brands WHERE id = $1", [
+      brandId,
+    ]);
+    if (brandCheck.rows.length === 0) {
+      return res.status(404).json({ message: "Brand not found" });
+    }
+
+    // Optional: verify segment exists
+    const segmentCheck = await pool.query(
+      "SELECT id FROM segments WHERE id = $1",
+      [segmentId],
+    );
+    if (segmentCheck.rows.length === 0) {
+      return res.status(404).json({ message: "Segment not found" });
+    }
+
+    const user = req.user || null;
+
+    const { products, total_count } = await getProductsByBrandAndSegment({
+      brandId,
+      segmentId,
+      page: pageNum,
+      limit: limitNum,
+      user,
+    });
+
+    if (!products.length) {
+      return res.status(404).json({
+        message: "No products found for this brand and segment",
+        products: [],
+        total_count: 0,
+      });
+    }
+
+    return res.status(200).json({
+      message: "Products fetched successfully",
+      page: pageNum,
+      per_page: limitNum,
+      total_count,
+      total_pages: Math.ceil(total_count / limitNum),
+      next_page: pageNum * limitNum < total_count ? pageNum + 1 : null,
+      prev_page: pageNum > 1 ? pageNum - 1 : null,
+      products,
+    });
+  } catch (err) {
+    next(err);
+  }
+};
+
 module.exports = {
   uploadProductsFromExcel,
   getAllProductsHandler,
@@ -957,4 +1064,6 @@ module.exports = {
   updateProductHandler,
   softDeleteProductHandler,
   hardDeleteProductHandler,
+  getBrandSegmentsHandler,
+  getProductsByBrandAndSegmentHandler,
 };

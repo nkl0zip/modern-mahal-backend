@@ -18,6 +18,8 @@ const {
   updateProductHandler,
   softDeleteProductHandler,
   hardDeleteProductHandler,
+  getBrandSegmentsHandler,
+  getProductsByBrandAndSegmentHandler,
 } = require("../../controllers/staff/product.controller");
 const {
   authenticateToken,
@@ -125,6 +127,18 @@ router.delete(
   authenticateToken,
   requireRole("ADMIN"),
   hardDeleteProductHandler,
+);
+
+// Allowed for all roles
+// GET /api/products/brands/:brandId/segments
+router.get("/brands/:brandId/segments", getBrandSegmentsHandler);
+
+// Allowed for all roles
+// GET /api/products/brands/:brandId/segments/:segmentId/products
+router.get(
+  "/brands/:brandId/segments/:segmentId/products",
+  optionalAuthenticateToken,
+  getProductsByBrandAndSegmentHandler,
 );
 
 module.exports = router;

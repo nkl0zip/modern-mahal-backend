@@ -1346,6 +1346,145 @@ const hardDeleteProduct = async (product_id) => {
   }
 };
 
+/**
+ * Get all distinct segments that are linked to products of a specific brand.
+ * @param {string} brandId - UUID of the brand
+ * @returns {Promise<Array>} - Array of segment objects { id, name, slug, product_count }
+ */
+const getSegmentsByBrand = async (brandId) => {
+  const query = `
+    SELECT
+      s.id,
+      s.name,
+      s.slug,
+      COUNT(DISTINCT p.id) AS product_count
+    FROM segments s
+    JOIN product_segments ps ON ps.segment_id = s.id
+    JOIN products p ON p.id = ps.product_id
+    WHERE p.brand_id = $1
+    GROUP BY s.id, s.name, s.slug
+    ORDER BY s.name ASC;
+  `;
+  const { rows } = await pool.query(query, [brandId]);
+  return rows;
+};
+
+/**
+ * Get products of a specific brand, filtered by a specific segment.
+ * Supports optional user-based category filtering (for USER role).
+ * Returns paginated results with product overview (primary variant price + image).
+ *
+ * @param {Object} params
+ * @param {string} params.brandId - UUID of the brand
+ * @param {string} params.segmentId - UUID of the segment
+ * @param {number} params.page - page number (default 1)
+ * @param {number} params.limit - items per page (default 20)
+ * @param {Object|null} params.user - authenticated user object (or null)
+ * @returns {Promise<Object>} - { products, total_count }
+ */
+const getProductsByBrandAndSegment = async ({
+  brandId,
+  segmentId,
+  page = 1,
+  limit = 20,
+  user = null,
+}) => {
+  const offset = (page - 1) * limit;
+  const values = [brandId, segmentId, limit, offset];
+  let categoryFilter = "";
+
+  // Apply category restriction ONLY for USER role
+  if (user && user.role === "USER") {
+    categoryFilter = `
+      AND p.id IN (
+        SELECT pc.product_id
+        FROM product_category pc
+        JOIN categories c ON c.id = pc.category_id
+        WHERE
+          c.is_global = TRUE
+          OR pc.category_id IN (
+            SELECT category_id
+            FROM user_category_preferences
+            WHERE user_id = $5
+          )
+      )
+    `;
+    values.push(user.id);
+  }
+
+  const query = `
+    WITH FilteredProducts AS (
+      SELECT
+        p.id,
+        p.name,
+        p.product_code,
+        p.brand_id,
+        (
+          SELECT v.id
+          FROM product_variants v
+          WHERE v.product_id = p.id
+          ORDER BY v.created_at ASC
+          LIMIT 1
+        ) AS variant_id,
+        (
+          SELECT v.mrp
+          FROM product_variants v
+          WHERE v.product_id = p.id
+          ORDER BY v.created_at ASC
+          LIMIT 1
+        ) AS price_per_unit,
+        (
+          SELECT pi.media_url
+          FROM products_image pi
+          WHERE pi.product_id = p.id
+            AND pi.display_order = 1
+          LIMIT 1
+        ) AS product_image
+      FROM products p
+      JOIN product_segments ps ON ps.product_id = p.id
+      WHERE p.brand_id = $1
+        AND ps.segment_id = $2
+        ${categoryFilter}
+    ),
+    CountResult AS (
+      SELECT COUNT(*) AS total_count FROM FilteredProducts
+    )
+    SELECT
+      fp.id AS product_id,
+      fp.name AS product_name,
+      fp.product_code,
+      fp.variant_id,
+      fp.price_per_unit,
+      b.name AS brand_name,
+      fp.product_image,
+      cr.total_count
+    FROM FilteredProducts fp
+    LEFT JOIN brands b ON fp.brand_id = b.id
+    CROSS JOIN CountResult cr
+    ORDER BY fp.name ASC
+    LIMIT $3 OFFSET $4;
+  `;
+
+  const { rows } = await pool.query(query, values);
+
+  if (!rows.length) {
+    return { products: [], total_count: 0 };
+  }
+
+  return {
+    products: rows.map((row) => ({
+      product_id: row.product_id,
+      product_name: row.product_name,
+      product_code: row.product_code,
+      variant_id: row.variant_id,
+      price_per_unit: row.price_per_unit,
+      brand_name: row.brand_name,
+      product_image: row.product_image,
+    })),
+    total_count: parseInt(rows[0].total_count, 10),
+  };
+};
+
 module.exports = {
   findIdByName,
   findOrCreateProductByCode,
@@ -1370,4 +1509,6 @@ module.exports = {
   updateProductSegments,
   softDeleteProduct,
   hardDeleteProduct,
+  getSegmentsByBrand,
+  getProductsByBrandAndSegment,
 };
