@@ -6,14 +6,22 @@ const createBrand = async (
   website_url,
   image,
   description,
-  establishment_date
+  establishment_date,
+  banner_image,
 ) => {
   const query = `
-    INSERT INTO brands (name, website_url, image, description, establishment_date)
-    VALUES ($1, $2, $3, $4, $5)
+    INSERT INTO brands (name, website_url, image, description, establishment_date, banner_image)
+    VALUES ($1, $2, $3, $4, $5, $6)
     RETURNING *;
   `;
-  const values = [name, website_url, image, description, establishment_date];
+  const values = [
+    name,
+    website_url,
+    image,
+    description,
+    establishment_date,
+    banner_image,
+  ];
   const result = await pool.query(query, values);
   return result.rows[0];
 };
@@ -48,9 +56,10 @@ const updateBrandById = async (id, updateFields) => {
     "image",
     "description",
     "establishment_date",
+    "banner_image",
   ];
   const keys = Object.keys(updateFields).filter((field) =>
-    allowedFields.includes(field)
+    allowedFields.includes(field),
   );
 
   if (keys.length === 0) {
@@ -74,10 +83,18 @@ const updateBrandById = async (id, updateFields) => {
   return result.rows[0];
 };
 
+// Get brand by ID
+const getBrandById = async (id) => {
+  const query = `SELECT * FROM brands WHERE id = $1;`;
+  const result = await pool.query(query, [id]);
+  return result.rows[0];
+};
+
 module.exports = {
   createBrand,
   findBrandByName,
   getAllBrands,
   deleteBrandById,
   updateBrandById,
+  getBrandById,
 };

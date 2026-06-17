@@ -4,13 +4,20 @@ const {
   deleteBrandById,
   getAllBrands,
   updateBrandById,
+  getBrandById,
 } = require("../../models/admin/brand.model");
 
 // POST /api/brand
 const createBrandHandler = async (req, res, next) => {
   try {
-    const { name, website_url, image, description, establishment_date } =
-      req.body;
+    const {
+      name,
+      website_url,
+      image,
+      description,
+      establishment_date,
+      banner_image,
+    } = req.body;
 
     if (!name)
       return res.status(400).json({ message: "Brand name is required!" });
@@ -28,7 +35,8 @@ const createBrandHandler = async (req, res, next) => {
       website_url,
       image,
       description,
-      establishment_date
+      establishment_date,
+      banner_image,
     );
 
     return res
@@ -44,6 +52,22 @@ const getAllBrandsHandler = async (req, res, next) => {
   try {
     const brands = await getAllBrands();
     res.json({ brands });
+  } catch (err) {
+    next(err);
+  }
+};
+
+// Get Brand by ID
+const getBrandByIdHandler = async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const brand = await getBrandById(id);
+
+    if (!brand) {
+      return res.status(404).json({ message: "Brand not found" });
+    }
+
+    res.json({ brand });
   } catch (err) {
     next(err);
   }
@@ -97,6 +121,7 @@ const updateBrandHandler = async (req, res, next) => {
 module.exports = {
   createBrandHandler,
   getAllBrandsHandler,
+  getBrandByIdHandler,
   deleteBrandHandler,
   updateBrandHandler,
 };
