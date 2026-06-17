@@ -3,6 +3,7 @@ const {
   createAddress,
   updateAddress,
   deleteAddress,
+  setDefaultAddress,
 } = require("../models/address.model");
 
 // To fetch all the addresses of a user
@@ -33,8 +34,9 @@ const getAllAddressesHandler = async (req, res, next) => {
 // To create a new address of an user - can have multiple addresses of a same user
 const createAddressHandler = async (req, res, next) => {
   try {
+    const user_id = req.user.id;
+
     const {
-      user_id,
       address_line_1,
       address_line_2,
       pincode,
@@ -43,11 +45,11 @@ const createAddressHandler = async (req, res, next) => {
       mobile_number,
       alternate_mobile_number,
       address_type,
+      is_default,
     } = req.body;
 
     // Required fields check
     if (
-      !user_id ||
       !address_line_1 ||
       !pincode ||
       !city ||
@@ -70,6 +72,7 @@ const createAddressHandler = async (req, res, next) => {
       mobile_number,
       alternate_mobile_number,
       address_type,
+      is_default: is_default || false,
     });
 
     res.status(201).json({
@@ -85,8 +88,8 @@ const createAddressHandler = async (req, res, next) => {
 const updateAddressHandler = async (req, res, next) => {
   try {
     const { id } = req.params;
+    const user_id = req.user.id;
     const {
-      user_id,
       address_line_1,
       address_line_2,
       pincode,
@@ -95,10 +98,10 @@ const updateAddressHandler = async (req, res, next) => {
       mobile_number,
       alternate_mobile_number,
       address_type,
+      is_default,
     } = req.body;
 
     if (
-      !user_id ||
       !address_line_1 ||
       !pincode ||
       !city ||
@@ -120,6 +123,7 @@ const updateAddressHandler = async (req, res, next) => {
       mobile_number,
       alternate_mobile_number,
       address_type,
+      is_default: is_default || false,
     });
 
     if (!updated) {
@@ -141,7 +145,7 @@ const updateAddressHandler = async (req, res, next) => {
 const deleteAddressHandler = async (req, res, next) => {
   try {
     const { id } = req.params;
-    const { user_id } = req.body;
+    const user_id = req.user.id;
 
     if (!user_id)
       return res.status(400).json({ message: "user_id is required" });
@@ -162,9 +166,37 @@ const deleteAddressHandler = async (req, res, next) => {
   }
 };
 
+// Set a specific address as default
+const setDefaultAddressHandler = async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const user_id = req.user.id;
+
+    if (!user_id) {
+      return res.status(400).json({ message: "user_id is required" });
+    }
+
+    const updated = await setDefaultAddress(id, user_id);
+
+    if (!updated) {
+      return res
+        .status(404)
+        .json({ message: "Address not found or does not belong to user." });
+    }
+
+    res.status(200).json({
+      message: "Default address updated successfully.",
+      address: updated,
+    });
+  } catch (err) {
+    next(err);
+  }
+};
+
 module.exports = {
   getAllAddressesHandler,
   createAddressHandler,
   updateAddressHandler,
   deleteAddressHandler,
+  setDefaultAddressHandler,
 };

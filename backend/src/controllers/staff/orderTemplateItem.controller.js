@@ -172,7 +172,7 @@ const updateItemQuantityHandler = async (req, res, next) => {
     const template = await checkTemplateAccess(
       item.template_id,
       user_id,
-      user_role
+      user_role,
     );
     if (!template) {
       return res
@@ -238,7 +238,7 @@ const updateItemStatusHandler = async (req, res, next) => {
     if (!allowedStatuses.includes(status)) {
       return res.status(400).json({
         message: `Invalid status. Allowed values: ${allowedStatuses.join(
-          ", "
+          ", ",
         )}`,
       });
     }
@@ -253,7 +253,7 @@ const updateItemStatusHandler = async (req, res, next) => {
     const template = await checkTemplateAccess(
       item.template_id,
       user_id,
-      user_role
+      user_role,
     );
     if (!template) {
       return res
@@ -321,7 +321,7 @@ const removeItemFromTemplateHandler = async (req, res, next) => {
     const template = await checkTemplateAccess(
       item.template_id,
       user_id,
-      user_role
+      user_role,
     );
     if (!template) {
       return res
