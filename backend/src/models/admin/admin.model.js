@@ -48,14 +48,78 @@ const findAdminByEmail = async (email) => {
   return result.rows[0];
 };
 
+// Find admin by ID
+const findAdminById = async (id) => {
+  const query = `SELECT * FROM users WHERE id = $1 AND role = 'ADMIN' LIMIT 1`;
+  const result = await pool.query(query, [id]);
+  return result.rows[0];
+};
+
 // Update admin password
 const updateAdminPassword = async (email, newHashedPassword) => {
   const query = `UPDATE users SET password_hash = $1 WHERE email = $2 AND role = 'ADMIN'`;
   await pool.query(query, [newHashedPassword, email]);
 };
 
+/**
+ * TOTP Methods - 2FA
+ */
+const enableTotp = async (userId, secret) => {
+  await pool.query(
+    `UPDATE users SET totp_secret = $1, totp_enabled = true WHERE id = $2 AND role = 'ADMIN'`,
+    [secret, userId],
+  );
+};
+
+const getTotpSecret = async (userId) => {
+  const { rows } = await pool.query(
+    `SELECT totp_secret FROM users WHERE id = $1 AND role = 'ADMIN'`,
+    [userId],
+  );
+  return rows[0]?.totp_secret;
+};
+
+const isTotpEnabled = async (userId) => {
+  const { rows } = await pool.query(
+    `SELECT totp_enabled FROM users WHERE id = $1 AND role = 'ADMIN'`,
+    [userId],
+  );
+  return rows[0]?.totp_enabled === true;
+};
+
+const saveBackupCodes = async (userId, codes) => {
+  await pool.query(
+    `UPDATE users SET totp_backup_codes = $1 WHERE id = $2 AND role = 'ADMIN'`,
+    [JSON.stringify(codes), userId],
+  );
+};
+
+const verifyBackupCode = async (userId, code) => {
+  const { rows } = await pool.query(
+    `SELECT totp_backup_codes FROM users WHERE id = $1 AND role = 'ADMIN'`,
+    [userId],
+  );
+  const codes = rows[0]?.totp_backup_codes || [];
+  const index = codes.indexOf(code);
+  if (index !== -1) {
+    codes.splice(index, 1);
+    await pool.query(
+      `UPDATE users SET totp_backup_codes = $1 WHERE id = $2 AND role = 'ADMIN'`,
+      [JSON.stringify(codes), userId],
+    );
+    return true;
+  }
+  return false;
+};
+
 module.exports = {
   ensureAdminAccount,
   findAdminByEmail,
+  findAdminById,
   updateAdminPassword,
+  enableTotp,
+  getTotpSecret,
+  isTotpEnabled,
+  saveBackupCodes,
+  verifyBackupCode,
 };
