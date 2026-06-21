@@ -47,7 +47,7 @@ const getTemplateItemsHandler = async (req, res, next) => {
 
 /**
  * POST /api/order-templates/:template_id/items
- * Add item to template
+ * Add item to template (with better validation)
  */
 const addItemToTemplateHandler = async (req, res, next) => {
   try {
@@ -76,10 +76,10 @@ const addItemToTemplateHandler = async (req, res, next) => {
         .json({ message: "Template not found or access denied" });
     }
 
-    // Check if template is editable
-    if (["COMPLETED", "CANCELLED"].includes(template.status)) {
+    // Check if template is editable (only DRAFT or ACTIVE)
+    if (!["DRAFT", "ACTIVE"].includes(template.status)) {
       return res.status(400).json({
-        message: `Cannot add items to ${template.status.toLowerCase()} template`,
+        message: `Cannot add items to ${template.status.toLowerCase()} template. Only DRAFT or ACTIVE templates are editable.`,
       });
     }
 
@@ -101,6 +101,22 @@ const addItemToTemplateHandler = async (req, res, next) => {
       return res.status(404).json({
         message: "Product or variant not found",
       });
+    }
+
+    // Check if variant is active
+    if (variant_id) {
+      const variantCheck = await pool.query(
+        `SELECT status FROM product_variants WHERE id = $1`,
+        [variant_id],
+      );
+      if (
+        variantCheck.rows.length > 0 &&
+        variantCheck.rows[0].status !== "ACTIVE"
+      ) {
+        return res.status(400).json({
+          message: "Variant is not active",
+        });
+      }
     }
 
     const unit_price_snapshot = priceResult.rows[0].mrp || 0;
@@ -358,10 +374,132 @@ const removeItemFromTemplateHandler = async (req, res, next) => {
   }
 };
 
+/**
+ * POST /api/order-templates/:template_id/items/bulk
+ * Add multiple items to template at once
+ */
+const bulkAddItemsToTemplateHandler = async (req, res, next) => {
+  try {
+    const { template_id } = req.params;
+    const user_id = req.user.id;
+    const user_role = req.user.role;
+    const { items } = req.body; // Array of { product_id, variant_id, quantity, notes }
+
+    if (!template_id || !items || !Array.isArray(items) || items.length === 0) {
+      return res.status(400).json({
+        message: "Template ID and items array are required",
+      });
+    }
+
+    // Check access
+    const template = await checkTemplateAccess(template_id, user_id, user_role);
+    if (!template) {
+      return res
+        .status(404)
+        .json({ message: "Template not found or access denied" });
+    }
+
+    // Check if template is editable
+    if (!["DRAFT", "ACTIVE"].includes(template.status)) {
+      return res.status(400).json({
+        message: `Cannot add items to ${template.status.toLowerCase()} template. Only DRAFT or ACTIVE templates are editable.`,
+      });
+    }
+
+    const addedItems = [];
+    const errors = [];
+
+    for (const itemData of items) {
+      try {
+        const { product_id, variant_id, quantity = 1, notes } = itemData;
+
+        if (!product_id) {
+          errors.push({ item: itemData, error: "Product ID is required" });
+          continue;
+        }
+
+        if (quantity <= 0) {
+          errors.push({
+            item: itemData,
+            error: "Quantity must be greater than 0",
+          });
+          continue;
+        }
+
+        // Get product/variant price
+        let priceQuery = `
+          SELECT pv.mrp, p.name as product_name
+          FROM products p
+          LEFT JOIN product_variants pv ON p.id = pv.product_id AND pv.id = $2
+          WHERE p.id = $1
+          LIMIT 1;
+        `;
+
+        const priceResult = await pool.query(priceQuery, [
+          product_id,
+          variant_id || null,
+        ]);
+
+        if (priceResult.rows.length === 0) {
+          errors.push({
+            item: itemData,
+            error: "Product or variant not found",
+          });
+          continue;
+        }
+
+        const unit_price_snapshot = priceResult.rows[0].mrp || 0;
+        const product_name = priceResult.rows[0].product_name;
+
+        const added_by = ["STAFF", "ADMIN"].includes(user_role)
+          ? "STAFF"
+          : "USER";
+
+        const item = await addItemToTemplate({
+          template_id,
+          product_id,
+          variant_id: variant_id || null,
+          quantity,
+          unit_price_snapshot,
+          added_by,
+          notes: notes || null,
+        });
+
+        addedItems.push(item);
+
+        // Add chat notification for each item
+        const {
+          addChatMessage,
+        } = require("../../models/staff/orderTemplateChat.model");
+        await addChatMessage({
+          template_id,
+          sender_id: user_id,
+          message: `Added ${quantity}x ${product_name} to the template`,
+          message_type: "TEXT",
+        });
+      } catch (err) {
+        errors.push({ item: itemData, error: err.message });
+      }
+    }
+
+    return res.status(201).json({
+      message: `${addedItems.length} item(s) added to template successfully`,
+      added_items: addedItems,
+      errors: errors.length > 0 ? errors : undefined,
+      total_attempted: items.length,
+      total_added: addedItems.length,
+      total_errors: errors.length,
+    });
+  } catch (err) {
+    next(err);
+  }
+};
+
 module.exports = {
   getTemplateItemsHandler,
   addItemToTemplateHandler,
   updateItemQuantityHandler,
   updateItemStatusHandler,
   removeItemFromTemplateHandler,
+  bulkAddItemsToTemplateHandler,
 };

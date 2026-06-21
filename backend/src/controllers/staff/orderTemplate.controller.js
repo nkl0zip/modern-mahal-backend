@@ -462,6 +462,49 @@ const moveTemplateToCartHandler = async (req, res, next) => {
   }
 };
 
+/**
+ * GET /api/order-templates/user/active
+ * Get user's DRAFT * ACTIVE templates only (for adding items)
+ */
+const getUserActiveTemplatesHandler = async (req, res, next) => {
+  try {
+    const user_id = req.user.id;
+    const user_role = req.user.role;
+
+    let templates;
+
+    if (user_role === "USER") {
+      // Get DRAFT and ACTIVE templates
+      const draftTemplates = await getUserTemplates(user_id, "DRAFT");
+      const activeTemplates = await getUserTemplates(user_id, "ACTIVE");
+      templates = [...draftTemplates, ...activeTemplates];
+
+      // Sort by updated_at desc
+      templates.sort((a, b) => new Date(b.updated_at) - new Date(a.updated_at));
+    } else if (["STAFF", "ADMIN"].includes(user_role)) {
+      // Staff/Admin can see all templates they're assigned to
+      const draftTemplates = await getStaffAssignedTemplates(user_id, "DRAFT");
+      const activeTemplates = await getStaffAssignedTemplates(
+        user_id,
+        "ACTIVE",
+      );
+      templates = [...draftTemplates, ...activeTemplates];
+
+      // Sort by updated_at desc
+      templates.sort((a, b) => new Date(b.updated_at) - new Date(a.updated_at));
+    } else {
+      return res.status(403).json({ message: "Unauthorized" });
+    }
+
+    return res.status(200).json({
+      message: "Active templates fetched successfully",
+      templates,
+    });
+  } catch (err) {
+    next(err);
+  }
+};
+
 module.exports = {
   createOrderTemplateHandler,
   getUserTemplatesHandler,
@@ -471,4 +514,5 @@ module.exports = {
   finalizeTemplateHandler,
   assignStaffHandler,
   moveTemplateToCartHandler,
+  getUserActiveTemplatesHandler,
 };

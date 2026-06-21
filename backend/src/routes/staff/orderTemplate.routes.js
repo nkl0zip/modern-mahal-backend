@@ -8,6 +8,7 @@ const {
   finalizeTemplateHandler,
   assignStaffHandler,
   moveTemplateToCartHandler,
+  getUserActiveTemplatesHandler,
 } = require("../../controllers/staff/orderTemplate.controller");
 
 const {
@@ -16,6 +17,7 @@ const {
   updateItemQuantityHandler,
   updateItemStatusHandler,
   removeItemFromTemplateHandler,
+  bulkAddItemsToTemplateHandler,
 } = require("../../controllers/staff/orderTemplateItem.controller");
 
 const {
@@ -56,6 +58,7 @@ router.post(
   assignStaffHandler,
 );
 router.post("/:template_id/move-to-cart", moveTemplateToCartHandler);
+router.get("/user/active", getUserActiveTemplatesHandler);
 
 // Template Items Routes
 router.get("/:template_id/items", getTemplateItemsHandler);
@@ -63,6 +66,7 @@ router.post("/:template_id/items", addItemToTemplateHandler);
 router.put("/items/:item_id/quantity", updateItemQuantityHandler);
 router.patch("/items/:item_id/status", updateItemStatusHandler);
 router.delete("/items/:item_id", removeItemFromTemplateHandler);
+router.post("/:template_id/items/bulk", bulkAddItemsToTemplateHandler);
 
 // Template Chat Routes
 router.get("/:template_id/chats", getTemplateChatsHandler);
