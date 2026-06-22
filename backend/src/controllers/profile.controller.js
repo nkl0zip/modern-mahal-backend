@@ -1,4 +1,4 @@
-const { updateUser, assignSlabToUser } = require("../models/user.model");
+const { updateUser, getUserWithSlab } = require("../models/user.model");
 const {
   getUserProfile,
   upsertUserProfile,
@@ -6,26 +6,6 @@ const {
   assignUserCategories,
   updateUserCategories,
 } = require("../models/user_profile.model");
-
-const getProfileHandler = async (req, res, next) => {
-  try {
-    const userId = req.user.id;
-    if (!userId) return res.status(400).json({ message: "UserId not found!" });
-
-    const profile = await getUserProfile(userId);
-    if (!profile)
-      return res
-        .status(400)
-        .json({ message: "profile does not fetched or doesn't exist" });
-
-    res.status(201).json({
-      message: "Profile fetched succesfully!",
-      profile,
-    });
-  } catch (err) {
-    next(err);
-  }
-};
 
 const updateProfile = async (req, res) => {
   try {
@@ -142,37 +122,59 @@ const getUserCategoriesHandler = async (req, res, next) => {
 };
 
 /**
- * ADMIN / STAFF: Assign slab to a USER
- * Body: { user_id, slab_id }
+ * Get complete user profile with slab and pay later info
  */
-const assignUserSlabHandler = async (req, res, next) => {
+const getCompleteProfileHandler = async (req, res, next) => {
   try {
-    const { user_id, slab_id } = req.body;
+    const userId = req.user.id;
 
-    if (!user_id || !slab_id) {
-      return res.status(400).json({
-        message: "user_id and slab_id are required.",
+    // Get user with slab info
+    const user = await getUserWithSlab(userId);
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: "User not found",
       });
     }
 
-    const updatedUser = await assignSlabToUser(user_id, slab_id);
+    // Get user profile
+    const profile = await getUserProfile(userId);
 
-    return res.status(200).json({
+    // Get user categories
+    const categories = await getUserCategories(userId);
+
+    res.status(200).json({
       success: true,
-      message: "User slab updated successfully.",
-      user: updatedUser,
+      message: "Profile fetched successfully",
+      data: {
+        user: {
+          id: user.id,
+          name: user.name,
+          email: user.email,
+          phone: user.phone,
+          role: user.role,
+          is_verified: user.is_verified,
+        },
+        profile: profile || null,
+        slab: {
+          id: user.slab_id,
+          name: user.slab_name,
+          rank: user.slab_rank,
+          pay_later_limit: parseFloat(user.pay_later_limit) || 0,
+          description: user.slab_description,
+        },
+        categories: categories || [],
+      },
     });
-  } catch (error) {
-    console.error("Error in assignUserSlabHandler:", error);
-    next(error);
+  } catch (err) {
+    next(err);
   }
 };
 
 module.exports = {
-  getProfileHandler,
   updateProfile,
   setUserCategoriesHandler,
   updateUserCategoriesHandler,
   getUserCategoriesHandler,
-  assignUserSlabHandler,
+  getCompleteProfileHandler,
 };

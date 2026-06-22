@@ -1,12 +1,11 @@
 const express = require("express");
 const router = express.Router();
 const {
-  getProfileHandler,
   updateProfile,
   setUserCategoriesHandler,
   getUserCategoriesHandler,
   updateUserCategoriesHandler,
-  assignUserSlabHandler,
+  getCompleteProfileHandler,
 } = require("../controllers/profile.controller");
 const {
   authenticateToken,
@@ -14,8 +13,8 @@ const {
 } = require("../middlewares/auth.middleware");
 const upload = require("../middlewares/upload.middleware");
 
-// GET /api/profile
-router.get("/", authenticateToken, getProfileHandler);
+// GET /api/profile - Get complete profile with slab info
+router.get("/", authenticateToken, getCompleteProfileHandler);
 
 // PATCH /api/profile
 router.patch("/", authenticateToken, upload.single("avatar"), updateProfile);
@@ -32,14 +31,5 @@ router.patch(
 
 // GET /api/profile/categories
 router.get("/categories", authenticateToken, getUserCategoriesHandler);
-
-// POST /api/profile/assign/slab
-// Only for ADMIN/STAFF
-router.post(
-  "/assign/slab",
-  authenticateToken,
-  requireRole(["STAFF", "ADMIN"]),
-  assignUserSlabHandler,
-);
 
 module.exports = router;

@@ -58,16 +58,24 @@ const updateUser = async (userId, name) => {
   return result.rows[0];
 };
 
-// Assign a slab to a user
-const assignSlabToUser = async (userId, slabId) => {
+/**
+ * Get user with slab details
+ */
+const getUserWithSlab = async (userId) => {
   const query = `
-    UPDATE users
-    SET slab_id = $1
-    WHERE id = $2
-      AND role = 'USER'
-    RETURNING id, name, email, slab_id;
+    SELECT 
+      u.*,
+      s.id as slab_id,
+      s.name as slab_name,
+      s.rank as slab_rank,
+      s.pay_later_limit,
+      s.description as slab_description
+    FROM users u
+    LEFT JOIN user_slabs s ON u.slab_id = s.id
+    WHERE u.id = $1
+    LIMIT 1;
   `;
-  const { rows } = await pool.query(query, [slabId, userId]);
+  const { rows } = await pool.query(query, [userId]);
   return rows[0] || null;
 };
 
@@ -77,5 +85,5 @@ module.exports = {
   findUserByPhone,
   updateUserPhoneAndVerify,
   updateUser,
-  assignSlabToUser,
+  getUserWithSlab,
 };
