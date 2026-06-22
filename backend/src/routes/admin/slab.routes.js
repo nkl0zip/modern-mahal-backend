@@ -20,7 +20,7 @@ const router = express.Router();
 router.get("/default", getDefaultSlabHandler);
 
 // ============= AUTHENTICATED USER ROUTES =============
-// GET /api/slabs/user/pay-later-limit - Get user's pay later limit
+// GET /api/slabs/user/pay-later-limit - Get user's pay later limit with credit details
 router.get(
   "/user/pay-later-limit",
   authenticateToken,

@@ -30,6 +30,7 @@ const orderRoutes = require("./routes/order.routes");
 const paymentRoutes = require("./routes/payment.routes");
 const subAdminRoutes = require("./routes/sub-admin.routes");
 const slabRoutes = require("./routes/admin/slab.routes");
+const paylaterRoutes = require("./routes/paylater.routes");
 
 const errorHandler = require("./middlewares/error.middleware");
 
@@ -71,6 +72,7 @@ app.use("/api/discount", discountRoutes);
 app.use("/api/orders", orderRoutes);
 app.use("/api/payments", paymentRoutes);
 app.use("/api/slabs", slabRoutes);
+app.use("/api/paylater", paylaterRoutes);
 
 app.use(errorHandler);
 

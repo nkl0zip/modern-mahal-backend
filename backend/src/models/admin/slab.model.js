@@ -7,7 +7,8 @@ const getAllSlabs = async (includeInactive = false) => {
   let query = `
     SELECT 
       s.*,
-      COUNT(u.id) as user_count
+      COUNT(u.id) as user_count,
+      COALESCE(SUM(u.pay_later_used), 0) as total_pay_later_used
     FROM user_slabs s
     LEFT JOIN users u ON u.slab_id = s.id
   `;
@@ -148,7 +149,7 @@ const getDefaultSlab = async () => {
 };
 
 /**
- * Get user's pay later limit
+ * Get user's pay later limit with detailed credit information
  */
 const getUserPayLaterLimit = async (user_id) => {
   const { rows } = await pool.query(
@@ -157,11 +158,29 @@ const getUserPayLaterLimit = async (user_id) => {
       u.id as user_id,
       u.name as user_name,
       u.email as user_email,
+      u.pay_later_balance as available_credit,
+      u.total_pay_later_used as total_used,
+      u.total_pay_later_repaid as total_repaid,
       s.id as slab_id,
       s.name as slab_name,
       s.rank as slab_rank,
-      s.pay_later_limit,
-      s.description as slab_description
+      s.pay_later_limit as slab_limit,
+      s.description as slab_description,
+      (s.pay_later_limit - u.pay_later_balance) as outstanding_balance,
+      (
+        SELECT COALESCE(SUM(amount), 0) 
+        FROM pay_later_transactions 
+        WHERE user_id = u.id 
+        AND transaction_type IN ('DEBIT', 'CREDIT')
+        AND created_at >= CURRENT_DATE - INTERVAL '30 days'
+      ) as last_30_days_usage,
+      (
+        SELECT COUNT(*) 
+        FROM pay_later_transactions 
+        WHERE user_id = u.id 
+        AND transaction_type = 'DEBIT'
+        AND created_at >= CURRENT_DATE - INTERVAL '30 days'
+      ) as last_30_days_transactions
     FROM users u
     LEFT JOIN user_slabs s ON u.slab_id = s.id
     WHERE u.id = $1
@@ -222,16 +241,31 @@ const getSlabAuditLogs = async (slab_id = null, limit = 50, offset = 0) => {
   return rows;
 };
 
-// Assign a slab to a user
+/**
+ * Assign a slab to a user
+ */
 const assignSlabToUser = async (userId, slabId) => {
+  // Get the slab details first to calculate initial pay later balance
+  const slab = await getSlabById(slabId);
+  if (!slab) {
+    throw new Error("Slab not found");
+  }
+
   const query = `
     UPDATE users
-    SET slab_id = $1
-    WHERE id = $2
+    SET 
+      slab_id = $1,
+      pay_later_balance = $2,
+      updated_at = CURRENT_TIMESTAMP
+    WHERE id = $3
       AND role = 'USER'
-    RETURNING id, name, email, slab_id;
+    RETURNING id, name, email, slab_id, pay_later_balance;
   `;
-  const { rows } = await pool.query(query, [slabId, userId]);
+  const { rows } = await pool.query(query, [
+    slabId,
+    slab.pay_later_limit,
+    userId,
+  ]);
   return rows[0] || null;
 };
 
