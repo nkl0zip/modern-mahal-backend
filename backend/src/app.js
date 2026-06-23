@@ -31,6 +31,7 @@ const paymentRoutes = require("./routes/payment.routes");
 const subAdminRoutes = require("./routes/sub-admin.routes");
 const slabRoutes = require("./routes/admin/slab.routes");
 const paylaterRoutes = require("./routes/paylater.routes");
+const storeRoutes = require("./routes/admin/store.routes");
 
 const errorHandler = require("./middlewares/error.middleware");
 
@@ -73,6 +74,7 @@ app.use("/api/orders", orderRoutes);
 app.use("/api/payments", paymentRoutes);
 app.use("/api/slabs", slabRoutes);
 app.use("/api/paylater", paylaterRoutes);
+app.use("/api/store", storeRoutes);
 
 app.use(errorHandler);
 
