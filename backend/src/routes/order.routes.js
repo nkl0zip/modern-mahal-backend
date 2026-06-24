@@ -20,7 +20,16 @@ router.post(
     body("billingAddressId")
       .isUUID()
       .withMessage("Valid billing address ID is required"),
-    body("appliedCouponId").optional().isUUID(),
+    body("delivery_method_code")
+      .isString()
+      .withMessage("Delivery method code is required"),
+    body("payment_methods")
+      .isArray()
+      .withMessage("Payment methods must be an array"),
+    body("appliedCouponId")
+      .optional({ nullable: true })
+      .isUUID()
+      .withMessage("Invalid coupon ID format"),
     body("metadata").optional().isObject(),
   ],
   orderController.checkout,
@@ -32,10 +41,23 @@ router.get("/my-orders", orderController.getMyOrders);
 // GET /api/orders/:orderId
 router.get("/:orderId", orderController.getOrderDetails);
 
+// GET /api/orders/:orderId/pickup-details
+router.get("/:orderId/pickup-details", orderController.getPickupDetails);
+
+// POST /api/orders/:orderId/pickup/verify - User side - verify with OTP (shows OTP to user)
+router.post(
+  "/:orderId/pickup/verify",
+  [
+    body("pickup_id").isString().withMessage("Pickup ID is required"),
+    body("otp").isString().withMessage("OTP is required"),
+  ],
+  orderController.verifyPickup,
+);
+
 // Admin routes
 router.get(
   "/admin/orders",
-  requireRole(["ADMIN", "STAFF"]),
+  requireRole(["ADMIN", "STAFF", "SUB_ADMIN"]),
   orderController.adminGetOrders,
 );
 
@@ -43,9 +65,16 @@ router.get(
 router.put(
   "/admin/:orderId/status",
   authenticateToken,
-  requireRole(["ADMIN", "STAFF"]),
+  requireRole(["ADMIN", "STAFF", "SUB_ADMIN"]),
   [
-    body("status").isIn(["PENDING", "PAID", "FAILED", "CANCELLED", "REFUNDED"]),
+    body("status").isIn([
+      "PENDING",
+      "PAID",
+      "FAILED",
+      "CANCELLED",
+      "REFUNDED",
+      "DELIVERED",
+    ]),
     body("reason").optional().isString(),
   ],
   orderController.updateOrderStatus,
@@ -54,14 +83,14 @@ router.put(
 router.get(
   "/admin/:orderId/history",
   authenticateToken,
-  requireRole(["ADMIN", "STAFF"]),
+  requireRole(["ADMIN", "STAFF", "SUB_ADMIN"]),
   orderController.getOrderHistory,
 );
 
 router.post(
   "/admin/:orderId/notes",
   authenticateToken,
-  requireRole(["ADMIN", "STAFF"]),
+  requireRole(["ADMIN", "STAFF", "SUB_ADMIN"]),
   [body("note").notEmpty(), body("isPrivate").optional().isBoolean()],
   orderController.addOrderNote,
 );
@@ -69,21 +98,21 @@ router.post(
 router.get(
   "/admin/:orderId/notes",
   authenticateToken,
-  requireRole(["ADMIN", "STAFF"]),
+  requireRole(["ADMIN", "STAFF", "SUB_ADMIN"]),
   orderController.getOrderNotes,
 );
 
 router.get(
   "/admin/:orderId/full",
   authenticateToken,
-  requireRole(["ADMIN", "STAFF"]),
+  requireRole(["ADMIN", "STAFF", "SUB_ADMIN"]),
   orderController.getFullOrder,
 );
 
 router.post(
   "/admin/:orderId/refund",
   authenticateToken,
-  requireRole(["ADMIN"]),
+  requireRole(["ADMIN", "SUB_ADMIN"]),
   [
     body("paymentId").isUUID(),
     body("amount").isFloat({ min: 0.01 }),
@@ -103,7 +132,7 @@ router.post(
 router.put(
   "/admin/returns/:returnId",
   authenticateToken,
-  requireRole(["ADMIN", "STAFF"]),
+  requireRole(["ADMIN", "STAFF", "SUB_ADMIN"]),
   [
     body("status").isIn(["APPROVED", "REJECTED"]),
     body("adminNotes").optional().isString(),

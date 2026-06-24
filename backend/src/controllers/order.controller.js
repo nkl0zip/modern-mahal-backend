@@ -1,5 +1,6 @@
 const orderModel = require("../models/order.model");
 const { validationResult } = require("express-validator");
+const pool = require("../config/db");
 
 // POST /api/orders/checkout
 const checkout = async (req, res) => {
@@ -8,18 +9,38 @@ const checkout = async (req, res) => {
     return res.status(400).json({ errors: errors.array() });
   }
 
-  const { shippingAddressId, billingAddressId, appliedCouponId, metadata } =
-    req.body;
+  const {
+    shippingAddressId,
+    billingAddressId,
+    delivery_method_code,
+    payment_methods,
+    appliedCouponId,
+    metadata,
+  } = req.body;
   const userId = req.user.id;
 
   try {
-    const order = await orderModel.createOrderFromCart(
-      userId,
-      shippingAddressId,
-      billingAddressId,
-      appliedCouponId,
-      metadata || {},
-    );
+    // Get or create cart for user
+    const { findOrCreateCartByUser } = require("../models/cart.model");
+    const cart = await findOrCreateCartByUser(userId);
+
+    // Use the new createOrderWithDelivery function
+    const order = await orderModel.createOrderWithDelivery({
+      userId: userId,
+      cartId: cart.id,
+      shippingAddressId: shippingAddressId,
+      billingAddressId: billingAddressId,
+      appliedCouponId: appliedCouponId || null, // Explicitly handle null
+      deliveryMethodCode: delivery_method_code,
+      deliveryData: {
+        // For SELF_PICKUP, we don't need address details
+        // For other methods, you'd need to pass address details
+        ...(metadata || {}),
+      },
+      paymentMethods: payment_methods || [],
+      metadata: metadata || {},
+    });
+
     res.status(201).json({
       success: true,
       message: "Order created successfully",
@@ -29,11 +50,14 @@ const checkout = async (req, res) => {
     console.error("Checkout error:", err);
     if (
       err.message.includes("Cart not found") ||
-      err.message.includes("Cart is empty")
+      err.message.includes("Cart is empty") ||
+      err.message.includes("Invalid delivery method") ||
+      err.message.includes("No active store found for pickup")
     ) {
       return res.status(400).json({ success: false, message: err.message });
     }
-    res.status(500).json({ success: false, message: "Failed to create order" });
+    // Send the actual error message for debugging
+    res.status(500).json({ success: false, message: err.message });
   }
 };
 
@@ -301,6 +325,171 @@ const getFullOrder = async (req, res) => {
   }
 };
 
+/**
+ * GET /api/orders/:orderId/pickup-details
+ * Get pickup details for SELF delivery
+ */
+const getPickupDetails = async (req, res, next) => {
+  try {
+    const { orderId } = req.params;
+    const userId = req.user.id;
+    const userRole = req.user.role;
+
+    const order = await orderModel.getOrderById(orderId);
+    if (!order) {
+      return res.status(404).json({
+        success: false,
+        message: "Order not found",
+      });
+    }
+
+    if (userRole !== "ADMIN" && order.user_id !== userId) {
+      return res.status(403).json({
+        success: false,
+        message: "Access denied",
+      });
+    }
+
+    // Get delivery details
+    const deliveryModel = require("../models/delivery.model");
+    const delivery = await deliveryModel.getDeliveryByOrderId(orderId);
+
+    if (!delivery) {
+      return res.status(404).json({
+        success: false,
+        message: "Delivery not found for this order",
+      });
+    }
+
+    // Check if it's SELF pickup
+    const method = await deliveryModel.getDeliveryMethodById(
+      delivery.delivery_method_id,
+    );
+    if (!method || method.code !== "SELF_PICKUP") {
+      return res.status(400).json({
+        success: false,
+        message: "This order is not a SELF pickup order",
+      });
+    }
+
+    // Get store details
+    const storeResult = await pool.query(
+      `
+      SELECT 
+        s.store_name,
+        s.address_line_1,
+        s.address_line_2,
+        s.city,
+        s.state,
+        s.pincode,
+        s.google_maps_url,
+        s.google_maps_embed_url,
+        s.pickup_instructions,
+        s.operating_hours
+      FROM store_details s
+      WHERE s.id = $1
+      `,
+      [delivery.store_pickup_location_id],
+    );
+
+    res.status(200).json({
+      success: true,
+      message: "Pickup details fetched successfully",
+      data: {
+        order: {
+          order_number: order.order_number,
+          created_at: order.created_at,
+          grand_total: order.grand_total,
+        },
+        pickup: {
+          pickup_id: delivery.pickup_id,
+          pickup_otp: delivery.pickup_otp,
+          expires_at: delivery.pickup_otp_expires_at,
+          status: delivery.delivery_status,
+        },
+        store: storeResult.rows[0] || null,
+      },
+    });
+  } catch (err) {
+    next(err);
+  }
+};
+
+/**
+ * POST /api/orders/:orderId/pickup/verify
+ * User verifies pickup with OTP (shows OTP to user for verification)
+ * This is for the customer to view their OTP, actual verification is done by staff
+ */
+const verifyPickup = async (req, res, next) => {
+  try {
+    const { orderId } = req.params;
+    const { pickup_id, otp } = req.body;
+    const userId = req.user.id;
+
+    // Check if order belongs to user
+    const order = await orderModel.getOrderById(orderId);
+    if (!order) {
+      return res.status(404).json({
+        success: false,
+        message: "Order not found",
+      });
+    }
+
+    if (order.user_id !== userId) {
+      return res.status(403).json({
+        success: false,
+        message: "Access denied",
+      });
+    }
+
+    // Get delivery
+    const deliveryModel = require("../models/delivery.model");
+    const delivery = await deliveryModel.getDeliveryByOrderId(orderId);
+
+    if (!delivery) {
+      return res.status(404).json({
+        success: false,
+        message: "Delivery not found",
+      });
+    }
+
+    // Verify OTP (this is just for validation, actual verification is done by staff)
+    if (delivery.pickup_id !== pickup_id || delivery.pickup_otp !== otp) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid pickup ID or OTP",
+      });
+    }
+
+    if (delivery.pickup_otp_expires_at < new Date()) {
+      return res.status(400).json({
+        success: false,
+        message: "OTP has expired. Please contact support.",
+      });
+    }
+
+    res.status(200).json({
+      success: true,
+      message:
+        "OTP verified successfully. Please proceed to the store for pickup.",
+      data: {
+        pickup_id: delivery.pickup_id,
+        verified: true,
+        store_name: delivery.store_name,
+        address:
+          `${delivery.address_line_1 || ""} ${delivery.address_line_2 || ""}`.trim(),
+        city: delivery.city,
+        state: delivery.state,
+        pincode: delivery.pincode,
+        google_maps_url: delivery.google_maps_url,
+        pickup_instructions: delivery.pickup_instructions,
+      },
+    });
+  } catch (err) {
+    next(err);
+  }
+};
+
 module.exports = {
   checkout,
   getMyOrders,
@@ -314,4 +503,6 @@ module.exports = {
   processReturn,
   initiateRefund,
   getFullOrder,
+  getPickupDetails,
+  verifyPickup,
 };

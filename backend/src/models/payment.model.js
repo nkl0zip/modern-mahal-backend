@@ -112,6 +112,140 @@ const hasOrderBeenPaid = async (orderId) => {
   return rows[0].paid;
 };
 
+/**
+ * Create payment split record
+ */
+const createPaymentSplit = async ({
+  orderId,
+  paymentMethod,
+  amount,
+  currency = "INR",
+  slabId = null,
+  metadata = {},
+}) => {
+  const { rows } = await pool.query(
+    `
+    INSERT INTO payment_splits (
+      order_id,
+      payment_method,
+      amount,
+      currency,
+      status,
+      slab_id,
+      metadata
+    )
+    VALUES ($1, $2, $3, $4, 'PENDING', $5, $6)
+    RETURNING *;
+    `,
+    [
+      orderId,
+      paymentMethod,
+      amount,
+      currency,
+      slabId,
+      JSON.stringify(metadata),
+    ],
+  );
+  return rows[0];
+};
+
+/**
+ * Get payment splits by order ID
+ */
+const getPaymentSplitsByOrder = async (orderId) => {
+  const { rows } = await pool.query(
+    `
+    SELECT 
+      ps.*,
+      pt.transaction_type as pay_later_type,
+      pt.balance_after as pay_later_balance_after,
+      p.status as payment_status,
+      p.payment_gateway,
+      p.gateway_transaction_id
+    FROM payment_splits ps
+    LEFT JOIN pay_later_transactions pt ON ps.pay_later_transaction_id = pt.id
+    LEFT JOIN payments p ON ps.payment_id = p.id
+    WHERE ps.order_id = $1
+    ORDER BY ps.created_at ASC;
+    `,
+    [orderId],
+  );
+  return rows;
+};
+
+/**
+ * Update payment split status
+ */
+const updatePaymentSplitStatus = async (splitId, status, metadata = {}) => {
+  const { rows } = await pool.query(
+    `
+    UPDATE payment_splits
+    SET 
+      status = $1,
+      metadata = metadata || $2,
+      completed_at = CASE WHEN $1 = 'COMPLETED' THEN CURRENT_TIMESTAMP ELSE completed_at END,
+      updated_at = CURRENT_TIMESTAMP
+    WHERE id = $3
+    RETURNING *;
+    `,
+    [status, JSON.stringify(metadata), splitId],
+  );
+  return rows[0] || null;
+};
+
+/**
+ * Link pay later transaction to split
+ */
+const linkPayLaterToSplit = async (splitId, payLaterTransactionId) => {
+  const { rows } = await pool.query(
+    `
+    UPDATE payment_splits
+    SET 
+      pay_later_transaction_id = $1,
+      updated_at = CURRENT_TIMESTAMP
+    WHERE id = $2
+    RETURNING *;
+    `,
+    [payLaterTransactionId, splitId],
+  );
+  return rows[0] || null;
+};
+
+/**
+ * Link payment to split
+ */
+const linkPaymentToSplit = async (splitId, paymentId) => {
+  const { rows } = await pool.query(
+    `
+    UPDATE payment_splits
+    SET 
+      payment_id = $1,
+      updated_at = CURRENT_TIMESTAMP
+    WHERE id = $2
+    RETURNING *;
+    `,
+    [paymentId, splitId],
+  );
+  return rows[0] || null;
+};
+
+/**
+ * Check if all splits are completed for an order
+ */
+const areAllSplitsCompleted = async (orderId) => {
+  const { rows } = await pool.query(
+    `
+    SELECT 
+      COUNT(*) as total,
+      COUNT(CASE WHEN status = 'COMPLETED' THEN 1 END) as completed
+    FROM payment_splits
+    WHERE order_id = $1;
+    `,
+    [orderId],
+  );
+  return rows[0] && rows[0].total === rows[0].completed;
+};
+
 module.exports = {
   createPayment,
   updatePaymentStatus,
@@ -119,4 +253,10 @@ module.exports = {
   getLatestPaymentByOrder,
   createPaymentEvent,
   hasOrderBeenPaid,
+  createPaymentSplit,
+  getPaymentSplitsByOrder,
+  updatePaymentSplitStatus,
+  linkPayLaterToSplit,
+  linkPaymentToSplit,
+  areAllSplitsCompleted,
 };

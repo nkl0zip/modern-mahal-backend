@@ -535,6 +535,271 @@ const getFullOrderDetails = async (orderId) => {
   };
 };
 
+/**
+ * Create order from cart with delivery and payment splits
+ * This is the main checkout function
+ */
+const createOrderWithDelivery = async ({
+  userId,
+  cartId,
+  shippingAddressId,
+  billingAddressId,
+  appliedCouponId = null,
+  deliveryMethodCode,
+  deliveryData = {},
+  paymentMethods = [],
+  metadata = {},
+}) => {
+  const client = await pool.connect();
+
+  try {
+    await client.query("BEGIN");
+
+    // 1. Lock cart and get items
+    const cartItemsResult = await client.query(
+      `
+      SELECT 
+        ci.variant_id,
+        pv.product_id,
+        ci.quantity,
+        ci.unit_price_snapshot,
+        ci.manual_discount_amount,
+        ci.coupon_discount_amount
+      FROM cart_items ci
+      JOIN product_variants pv ON ci.variant_id = pv.id
+      WHERE ci.cart_id = $1
+      FOR UPDATE
+      `,
+      [cartId],
+    );
+
+    if (cartItemsResult.rows.length === 0) {
+      throw new Error("Cart is empty");
+    }
+
+    // 2. Calculate totals
+    let totalAmount = 0;
+    let discountAmount = 0;
+
+    for (const item of cartItemsResult.rows) {
+      const unitPrice = parseFloat(item.unit_price_snapshot) || 0;
+      const manualDiscount = parseFloat(item.manual_discount_amount) || 0;
+      const couponDiscount = parseFloat(item.coupon_discount_amount) || 0;
+      const quantity = parseInt(item.quantity) || 0;
+
+      const itemTotal = unitPrice * quantity - manualDiscount - couponDiscount;
+      totalAmount += itemTotal;
+      discountAmount += manualDiscount + couponDiscount;
+    }
+
+    // 3. Get delivery method and calculate charges
+    const deliveryMethod = await client.query(
+      `SELECT * FROM delivery_methods WHERE code = $1 AND is_active = true`,
+      [deliveryMethodCode],
+    );
+
+    if (deliveryMethod.rows.length === 0) {
+      throw new Error("Invalid delivery method");
+    }
+
+    const method = deliveryMethod.rows[0];
+    let deliveryCharge = parseFloat(method.base_charge || 0);
+
+    // Add distance charges if applicable
+    if (method.code !== "SELF_PICKUP" && deliveryData.distance) {
+      deliveryCharge +=
+        parseFloat(method.charge_per_km || 0) * deliveryData.distance;
+    }
+
+    // 4. Calculate tax (5%)
+    const taxRate = 0.05;
+    const taxAmount =
+      Math.round(
+        (totalAmount - discountAmount + deliveryCharge) * taxRate * 100,
+      ) / 100;
+    const grandTotal =
+      totalAmount - discountAmount + deliveryCharge + taxAmount;
+
+    // 5. Generate order number
+    const orderNumber = generateOrderNumber();
+
+    let order;
+
+    // 6. Insert order
+    try {
+      console.log("Attempting to insert order with values:", {
+        userId,
+        cartId,
+        orderNumber,
+        totalAmount,
+        discountAmount,
+        taxAmount,
+        deliveryCharge,
+        grandTotal,
+        shippingAddressId,
+        billingAddressId,
+        appliedCouponId,
+        metadata,
+      });
+
+      const orderResult = await client.query(
+        `
+    INSERT INTO orders (
+      user_id, cart_id, order_number, total_amount, discount_amount,
+      tax_amount, shipping_amount, grand_total, status,
+      shipping_address_id, billing_address_id, applied_coupon_id, metadata
+    )
+    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'PENDING', $9, $10, $11, $12)
+    RETURNING *;
+    `,
+        [
+          userId,
+          cartId,
+          orderNumber,
+          totalAmount,
+          discountAmount,
+          taxAmount,
+          deliveryCharge,
+          grandTotal,
+          shippingAddressId,
+          billingAddressId,
+          appliedCouponId,
+          JSON.stringify(metadata),
+        ],
+      );
+
+      // Check if order was inserted properly
+      if (!orderResult.rows || orderResult.rows.length === 0) {
+        throw new Error("Failed to create order - no rows returned");
+      }
+
+      order = orderResult.rows[0];
+
+      // Log the created order for debugging
+      console.log("Order created successfully:", order.id);
+      console.log("Order data:", order);
+    } catch (insertError) {
+      console.error("Order insertion failed - Full error:", insertError);
+      console.error("Error code:", insertError.code);
+      console.error("Error detail:", insertError.detail);
+      throw new Error(`Order insertion failed: ${insertError.message}`);
+    }
+
+    // 7. Insert order items
+    for (const item of cartItemsResult.rows) {
+      const totalPrice =
+        item.unit_price_snapshot * item.quantity -
+        item.manual_discount_amount -
+        item.coupon_discount_amount;
+
+      await client.query(
+        `
+        INSERT INTO order_items (
+          order_id, product_id, variant_id, quantity,
+          unit_price, discount_amount, total_price
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, $7);
+        `,
+        [
+          order.id,
+          item.product_id,
+          item.variant_id,
+          parseInt(item.quantity),
+          parseFloat(item.unit_price_snapshot) || 0,
+          (parseFloat(item.manual_discount_amount) || 0) +
+            (parseFloat(item.coupon_discount_amount) || 0),
+          parseFloat(totalPrice) || 0,
+        ],
+      );
+    }
+
+    // 8. Create delivery record
+    const deliveryModel = require("./delivery.model");
+    const delivery = await deliveryModel.createDelivery({
+      orderId: order.id,
+      deliveryMethodId: method.id,
+      deliveryAddressId: deliveryData.addressId || null,
+      deliveryAddressText: deliveryData.addressText || null,
+      deliveryLatitude: deliveryData.latitude || null,
+      deliveryLongitude: deliveryData.longitude || null,
+      deliveryNotes: deliveryData.notes || null,
+      storePickupLocationId: deliveryData.storeId || null,
+      pickupInstructions: deliveryData.pickupInstructions || null,
+      deliveryCharge: deliveryCharge,
+      metadata: {
+        estimated_days: method.estimated_delivery_days,
+        ...deliveryData.metadata,
+      },
+      client: client,
+    });
+
+    // 9. Update order with delivery info
+    await client.query(
+      `
+      UPDATE orders
+      SET 
+        delivery_method_id = $1,
+        delivery_id = $2,
+        shipping_amount = $3,
+        updated_at = CURRENT_TIMESTAMP
+      WHERE id = $4
+      `,
+      [method.id, delivery.id, deliveryCharge, order.id],
+    );
+
+    // 10. For SELF_PICKUP, generate pickup details
+    let pickupDetails = null;
+    if (method.code === "SELF_PICKUP") {
+      const storeResult = await client.query(
+        `SELECT id FROM store_details WHERE is_active = true ORDER BY created_at DESC LIMIT 1`,
+      );
+
+      if (storeResult.rows.length === 0) {
+        throw new Error("No active store found for pickup");
+      }
+
+      const pickupResult = await deliveryModel.generatePickupDetails(
+        delivery.id,
+        storeResult.rows[0].id,
+        client,
+      );
+
+      pickupDetails = {
+        pickup_id: pickupResult.pickup_id,
+        pickup_otp: pickupResult.pickup_otp,
+        expires_at: pickupResult.pickup_otp_expires_at,
+      };
+    }
+
+    // 11. Create payment splits
+    const paymentService = require("../services/payment.service");
+    const paymentSplits = await paymentService.calculatePaymentSplits(
+      order.id,
+      userId,
+      paymentMethods,
+      client,
+    );
+
+    // 12. Clear cart
+    await client.query("DELETE FROM cart_items WHERE cart_id = $1", [cartId]);
+
+    await client.query("COMMIT");
+
+    return {
+      order,
+      delivery,
+      pickup_details: pickupDetails,
+      payment_splits: paymentSplits.splits,
+      grand_total: grandTotal,
+    };
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
+};
+
 module.exports = {
   createOrderFromCart,
   getOrderById,
@@ -550,4 +815,5 @@ module.exports = {
   createRefund,
   getOrderRefunds,
   getFullOrderDetails,
+  createOrderWithDelivery,
 };

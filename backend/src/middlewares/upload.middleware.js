@@ -1,42 +1,9 @@
 const multer = require("multer");
-const { CloudinaryStorage } = require("multer-storage-cloudinary");
+const path = require("path");
 const cloudinary = require("../config/cloudinary");
 
-const storage = new CloudinaryStorage({
-  cloudinary: cloudinary,
-  params: (req, file) => {
-    // Determine folder based on file type or route
-    let folder = "uploads";
-
-    if (req.path.includes("/repay")) {
-      folder = "paylater-receipts";
-    } else if (req.path.includes("/avatar")) {
-      folder = "avatars";
-    } else if (req.path.includes("/tickets")) {
-      folder = "tickets";
-    } else if (req.path.includes("/order-templates")) {
-      folder = "order-templates";
-    }
-
-    return {
-      folder: folder,
-      allowed_formats: [
-        "jpg",
-        "jpeg",
-        "png",
-        "gif",
-        "mp3",
-        "mp4",
-        "pdf",
-        "doc",
-        "docx",
-        "webp",
-        "svg",
-      ],
-      resource_type: "auto",
-    };
-  },
-});
+// Memory storage for temporary file handling
+const storage = multer.memoryStorage();
 
 const fileFilter = (req, file, cb) => {
   // Accept images, audio, and documents
@@ -78,4 +45,45 @@ const upload = multer({
   },
 });
 
+// Helper function to upload to Cloudinary manually
+const uploadToCloudinary = async (file, folder = "uploads", options = {}) => {
+  return new Promise((resolve, reject) => {
+    // Determine resource type
+    let resourceType = "auto";
+    if (file.mimetype === "application/pdf") {
+      resourceType = "raw";
+    } else if (file.mimetype.startsWith("image/")) {
+      resourceType = "image";
+    } else if (file.mimetype.startsWith("audio/")) {
+      resourceType = "video";
+    } else if (file.mimetype.startsWith("video/")) {
+      resourceType = "video";
+    }
+
+    const uploadOptions = {
+      folder: folder,
+      resource_type: resourceType,
+      use_filename: true,
+      unique_filename: true,
+      ...options,
+    };
+
+    // Upload buffer directly to Cloudinary
+    const stream = cloudinary.uploader.upload_stream(
+      uploadOptions,
+      (error, result) => {
+        if (error) {
+          console.error("Cloudinary upload error:", error);
+          reject(error);
+        } else {
+          resolve(result);
+        }
+      },
+    );
+
+    stream.end(file.buffer);
+  });
+};
+
 module.exports = upload;
+module.exports.uploadToCloudinary = uploadToCloudinary;

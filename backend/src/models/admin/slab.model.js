@@ -245,28 +245,138 @@ const getSlabAuditLogs = async (slab_id = null, limit = 50, offset = 0) => {
  * Assign a slab to a user
  */
 const assignSlabToUser = async (userId, slabId) => {
-  // Get the slab details first to calculate initial pay later balance
-  const slab = await getSlabById(slabId);
-  if (!slab) {
-    throw new Error("Slab not found");
-  }
+  const client = await pool.connect();
 
-  const query = `
-    UPDATE users
-    SET 
-      slab_id = $1,
-      pay_later_balance = $2,
-      updated_at = CURRENT_TIMESTAMP
-    WHERE id = $3
-      AND role = 'USER'
-    RETURNING id, name, email, slab_id, pay_later_balance;
-  `;
-  const { rows } = await pool.query(query, [
-    slabId,
-    slab.pay_later_limit,
-    userId,
-  ]);
-  return rows[0] || null;
+  try {
+    await client.query("BEGIN");
+
+    // Get the slab details
+    const slabResult = await client.query(
+      `SELECT * FROM user_slabs WHERE id = $1 AND is_active = true`,
+      [slabId],
+    );
+
+    if (slabResult.rows.length === 0) {
+      throw new Error("Slab not found or inactive");
+    }
+
+    const slab = slabResult.rows[0];
+
+    // Get current user pay later balance
+    const userResult = await client.query(
+      `SELECT pay_later_balance, total_pay_later_used, total_pay_later_repaid FROM users WHERE id = $1 FOR UPDATE`,
+      [userId],
+    );
+
+    if (userResult.rows.length === 0) {
+      throw new Error("User not found");
+    }
+
+    const currentBalance = parseFloat(
+      userResult.rows[0].pay_later_balance || 0,
+    );
+    const totalUsed = parseFloat(userResult.rows[0].total_pay_later_used || 0);
+    const totalRepaid = parseFloat(
+      userResult.rows[0].total_pay_later_repaid || 0,
+    );
+
+    // Calculate outstanding balance (used - repaid)
+    const outstandingBalance = totalUsed - totalRepaid;
+
+    // Calculate new available credit
+    // If there's no outstanding balance, set to slab limit
+    // Otherwise, set to (slab limit - outstanding balance), but not less than 0
+    let newAvailableCredit;
+    if (outstandingBalance <= 0) {
+      // No outstanding balance, give full slab limit
+      newAvailableCredit = parseFloat(slab.pay_later_limit || 0);
+    } else {
+      // Has outstanding balance, reduce available credit
+      newAvailableCredit = Math.max(
+        0,
+        parseFloat(slab.pay_later_limit || 0) - outstandingBalance,
+      );
+    }
+
+    // Update user with new slab and available credit
+    const updateResult = await client.query(
+      `
+      UPDATE users
+      SET 
+        slab_id = $1,
+        pay_later_balance = $2,
+        updated_at = CURRENT_TIMESTAMP
+      WHERE id = $3
+      RETURNING id, name, email, slab_id, pay_later_balance, total_pay_later_used, total_pay_later_repaid;
+      `,
+      [slabId, newAvailableCredit, userId],
+    );
+
+    // Create a pay later transaction for the credit
+    if (newAvailableCredit > 0) {
+      await client.query(
+        `
+    INSERT INTO pay_later_transactions (
+      user_id,
+      transaction_type,
+      amount,
+      balance_after,
+      payment_method,
+      description,
+      approved_by,
+      metadata
+    )
+    VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+    `,
+        [
+          userId,
+          "CREDIT",
+          newAvailableCredit,
+          newAvailableCredit,
+          "SYSTEM",
+          `Slab assigned: ${slab.name} with limit ${slab.pay_later_limit}`,
+          userId,
+          JSON.stringify({
+            action: "SLAB_ASSIGNMENT",
+            slab_id: slabId,
+            slab_name: slab.name,
+            slab_limit: slab.pay_later_limit,
+            outstanding_balance: outstandingBalance,
+            previous_balance: currentBalance,
+          }),
+        ],
+      );
+    }
+
+    // Log the slab assignment
+    await client.query(
+      `
+      INSERT INTO slab_audit_logs (slab_id, action, changes, performed_by, performed_by_role)
+      VALUES ($1, $2, $3, $4, $5)
+      `,
+      [
+        slabId,
+        "ASSIGN",
+        JSON.stringify({
+          previous_balance: currentBalance,
+          new_balance: newAvailableCredit,
+          outstanding_balance: outstandingBalance,
+          slab_limit: slab.pay_later_limit,
+          user_id: userId,
+        }),
+        userId,
+        "ADMIN",
+      ],
+    );
+
+    await client.query("COMMIT");
+    return updateResult.rows[0] || null;
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
 };
 
 module.exports = {
