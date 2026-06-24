@@ -45,6 +45,9 @@ const getCartHandler = async (req, res, next) => {
           items: [],
           total_original_cost: 0,
           total_discount_amount: 0,
+          subtotal: 0,
+          tax_amount: 0,
+          tax_rate: 18,
           final_total: 0,
           applied_coupon: null,
         },
@@ -52,7 +55,7 @@ const getCartHandler = async (req, res, next) => {
     }
 
     /* -----------------------------------------
-       Fetch Applied Coupon By ID (CORRECT FIX)
+       Fetch Applied Coupon By ID
     ------------------------------------------ */
     let coupon = null;
 
@@ -76,7 +79,7 @@ const getCartHandler = async (req, res, next) => {
     }
 
     /* -----------------------------------------
-       Apply Pricing Logic
+       Apply Pricing Logic (includes tax)
     ------------------------------------------ */
     const pricing = await applyCartPricingLogic({
       items: rawItems,
@@ -91,6 +94,9 @@ const getCartHandler = async (req, res, next) => {
         items: pricing.items,
         total_original_cost: pricing.total_original_cost,
         total_discount_amount: pricing.total_discount_amount,
+        subtotal: pricing.subtotal,
+        tax_amount: pricing.tax_amount,
+        tax_rate: pricing.tax_rate,
         final_total: pricing.final_total,
         applied_coupon: pricing.applied_coupon,
       },

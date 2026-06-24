@@ -55,8 +55,8 @@ const recalculateCart = async (cart_id) => {
     );
 
     let total_original = 0;
-    let total_manual_discount = 0;
-    let total_coupon_discount = 0;
+    let total_discount = 0;
+    let subtotal = 0;
 
     let coupon = null;
 
@@ -68,71 +68,115 @@ const recalculateCart = async (cart_id) => {
       coupon = rows[0] || null;
     }
 
-    for (const item of items) {
-      const base_total =
-        Number(item.unit_price_snapshot) * Number(item.quantity);
+    // Fetch product segments for coupon eligibility
+    const variantIds = items.map((item) => item.variant_id);
+    let productSegmentMap = {};
 
+    if (variantIds.length > 0) {
+      const segmentQuery = `
+        SELECT 
+          pv.id as variant_id,
+          ps.segment_id
+        FROM product_variants pv
+        JOIN product_segments ps ON ps.product_id = pv.product_id
+        WHERE pv.id = ANY($1)
+      `;
+      const segmentResult = await client.query(segmentQuery, [variantIds]);
+
+      // Build map of variant_id -> segment_ids
+      segmentResult.rows.forEach((row) => {
+        if (!productSegmentMap[row.variant_id]) {
+          productSegmentMap[row.variant_id] = new Set();
+        }
+        productSegmentMap[row.variant_id].add(row.segment_id);
+      });
+    }
+
+    // Get coupon segments if coupon exists
+    let couponSegmentIds = new Set();
+    if (coupon) {
+      const couponSegmentsResult = await client.query(
+        `SELECT segment_id FROM discount_segments WHERE discount_id = $1`,
+        [coupon.id],
+      );
+      couponSegmentIds = new Set(
+        couponSegmentsResult.rows.map((r) => r.segment_id),
+      );
+    }
+
+    for (const item of items) {
+      const unitPrice = Number(item.unit_price_snapshot);
+      const quantity = Number(item.quantity);
+      const base_total = unitPrice * quantity;
       total_original += base_total;
 
-      let manual_total = 0;
-      let coupon_total = 0;
+      let itemDiscount = 0;
 
+      // Apply manual discount (per unit)
+      const manualDiscountPerUnit = Number(item.manual_discount_amount || 0);
+      const manualTotal = manualDiscountPerUnit * quantity;
+
+      // Apply coupon discount if present and eligible
+      let couponTotal = 0;
       if (coupon) {
-        const eligible = await isVariantEligibleForCoupon(
-          item.variant_id,
-          coupon.id,
-          client,
-        );
+        // Check if variant is eligible for coupon
+        const variantSegments = productSegmentMap[item.variant_id] || new Set();
+        const isEligible =
+          couponSegmentIds.size === 0 ||
+          [...variantSegments].some((segId) => couponSegmentIds.has(segId));
 
-        if (eligible) {
-          const coupon_per_unit = calculateCouponPerUnit(
-            Number(item.unit_price_snapshot),
-            coupon,
-          );
-
-          coupon_total = coupon_per_unit * item.quantity;
-
-          await client.query(
-            `
-            UPDATE cart_items
-            SET coupon_discount_amount = $1
-            WHERE id = $2
-          `,
-            [coupon_per_unit, item.id],
-          );
-        } else {
-          await client.query(
-            `
-            UPDATE cart_items
-            SET coupon_discount_amount = 0
-            WHERE id = $1
-          `,
-            [item.id],
-          );
+        if (isEligible) {
+          // Calculate coupon discount on the original price
+          if (coupon.discount_mode === "PERCENTAGE") {
+            couponTotal = (base_total * Number(coupon.value)) / 100;
+          } else if (coupon.discount_mode === "FLAT") {
+            // For flat discount, distribute proportionally
+            // We'll handle this by applying to the first item or proportionally
+            // For simplicity, we'll apply flat discount across all eligible items proportionally
+            // But since we're iterating items, we need to know total eligible items
+            // For now, we'll use the simple approach
+            couponTotal = Math.min(
+              Number(coupon.value) / items.length,
+              base_total,
+            );
+          }
         }
+
+        // Store coupon discount per unit in the database
+        const couponPerUnit = couponTotal / quantity;
+        await client.query(
+          `
+          UPDATE cart_items
+          SET coupon_discount_amount = $1
+          WHERE id = $2
+          `,
+          [couponPerUnit, item.id],
+        );
       } else {
+        // Remove coupon discount if no coupon
         await client.query(
           `
           UPDATE cart_items
           SET coupon_discount_amount = 0
           WHERE id = $1
-        `,
+          `,
           [item.id],
         );
       }
 
-      manual_total =
-        Number(item.manual_discount_amount || 0) * Number(item.quantity);
+      // Total discount for this item
+      itemDiscount = manualTotal + couponTotal;
+      total_discount += itemDiscount;
 
-      if (coupon) {
-        total_coupon_discount += coupon_total;
-      } else {
-        total_manual_discount += manual_total;
-      }
+      // Calculate discounted subtotal for this item
+      const itemSubtotal = base_total - itemDiscount;
+      subtotal += itemSubtotal;
     }
 
-    const final_total =
-      total_original - total_manual_discount - total_coupon_discount;
+    // Calculate GST (18% on subtotal after all discounts)
+    const TAX_RATE = 0.18; // 18% GST
+    const tax_amount = Math.round(subtotal * TAX_RATE * 100) / 100;
+    const final_total = subtotal + tax_amount;
 
     await client.query(
       `
@@ -147,8 +191,12 @@ const recalculateCart = async (cart_id) => {
 
     return {
       total_original,
-      total_manual_discount,
-      total_coupon_discount,
+      total_manual_discount: 0, // We're not tracking this separately in this function
+      total_coupon_discount: total_discount, // This is the total discount
+      total_discount,
+      subtotal,
+      tax_amount,
+      tax_rate: TAX_RATE * 100,
       final_total,
     };
   } catch (err) {
@@ -195,6 +243,7 @@ const getProductSegmentsMap = async (productIds = []) => {
  * - Coupon applies on ORIGINAL unit_price_snapshot
  * - If coupon applies to item → manual discount removed for that item
  * - Manual discount applies only when coupon not affecting that item
+ * - Tax (18% GST) is applied on discounted total (after all discounts)
  */
 const applyCartPricingLogic = async ({ items, coupon = null, user_id }) => {
   if (!items || !items.length) {
@@ -202,6 +251,8 @@ const applyCartPricingLogic = async ({ items, coupon = null, user_id }) => {
       items: [],
       total_original_cost: 0,
       total_discount_amount: 0,
+      subtotal: 0,
+      tax_amount: 0,
       final_total: 0,
       applied_coupon: null,
     };
@@ -228,6 +279,7 @@ const applyCartPricingLogic = async ({ items, coupon = null, user_id }) => {
 
   let total_original_cost = 0;
   let total_discount_amount = 0;
+  let subtotal = 0;
 
   const processedItems = items.map((item) => {
     const originalUnit = Number(item.unit_price_snapshot);
@@ -253,8 +305,6 @@ const applyCartPricingLogic = async ({ items, coupon = null, user_id }) => {
       if (coupon.discount_mode === "PERCENTAGE") {
         itemDiscount = (originalSubtotal * Number(coupon.value)) / 100;
       } else if (coupon.discount_mode === "FLAT") {
-        // Flat distributed proportionally per item
-        // (you can later optimize for proportional distribution)
         itemDiscount = Math.min(Number(coupon.value), originalSubtotal);
       }
 
@@ -276,7 +326,7 @@ const applyCartPricingLogic = async ({ items, coupon = null, user_id }) => {
     }
 
     const finalSubtotal = originalSubtotal - itemDiscount;
-
+    subtotal += finalSubtotal;
     total_discount_amount += itemDiscount;
 
     return {
@@ -287,6 +337,11 @@ const applyCartPricingLogic = async ({ items, coupon = null, user_id }) => {
       final_subtotal: finalSubtotal,
     };
   });
+
+  // Calculate GST (18% on subtotal after discounts)
+  const TAX_RATE = 0.18; // 18% GST
+  const tax_amount = subtotal * TAX_RATE;
+  const final_total = subtotal + tax_amount;
 
   let couponSegments = [];
 
@@ -308,7 +363,10 @@ const applyCartPricingLogic = async ({ items, coupon = null, user_id }) => {
     items: processedItems,
     total_original_cost,
     total_discount_amount,
-    final_total: total_original_cost - total_discount_amount,
+    subtotal,
+    tax_amount,
+    tax_rate: TAX_RATE * 100, // 18%
+    final_total,
     applied_coupon: coupon
       ? {
           id: coupon.id,

@@ -14,6 +14,10 @@ const {
   deleteManualDiscountById,
 } = require("../../models/staff/discount.model");
 
+const { getCartItemsWithProductDetails } = require("../../models/cart.model");
+
+const { applyCartPricingLogic } = require("../../services/cartPricing.service");
+
 const { getValidCouponByCode } = require("../../models/staff/discount.model");
 const { recalculateCart } = require("../../services/cartPricing.service");
 
@@ -308,28 +312,98 @@ const applyCouponHandler = async (req, res, next) => {
     const { coupon_code } = req.body;
     const user_id = req.user.id;
 
+    // Validate coupon
     const coupon = await getValidCouponByCode(coupon_code);
+    if (!coupon) {
+      return res.status(400).json({ message: "Invalid or expired coupon" });
+    }
 
-    if (!coupon) return res.status(400).json({ message: "Invalid coupon" });
-
-    const { rows } = await pool.query(
+    // Get or create cart
+    const cartResult = await pool.query(
       `SELECT * FROM cart WHERE user_id = $1 LIMIT 1`,
       [user_id],
     );
 
-    if (!rows.length)
-      return res.status(404).json({ message: "Cart not found" });
+    if (cartResult.rows.length === 0) {
+      // Create cart if it doesn't exist
+      const newCart = await pool.query(
+        `INSERT INTO cart (user_id) VALUES ($1) RETURNING *`,
+        [user_id],
+      );
+      if (!newCart.rows.length) {
+        throw new Error("Failed to create cart");
+      }
+      cartResult.rows[0] = newCart.rows[0];
+    }
 
-    const cart = rows[0];
+    const cart = cartResult.rows[0];
 
-    await pool.query(`UPDATE cart SET applied_coupon_id = $1 WHERE id = $2`, [
-      coupon.id,
-      cart.id,
-    ]);
+    // Check if cart has items
+    const itemsResult = await pool.query(
+      `SELECT COUNT(*) as count FROM cart_items WHERE cart_id = $1`,
+      [cart.id],
+    );
 
-    const pricing = await recalculateCart(cart.id);
+    if (parseInt(itemsResult.rows[0].count) === 0) {
+      return res.status(400).json({
+        message: "Cannot apply coupon to empty cart",
+      });
+    }
 
-    res.json({ message: "Coupon applied", pricing });
+    // Apply coupon to cart
+    await pool.query(
+      `UPDATE cart SET applied_coupon_id = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2`,
+      [coupon.id, cart.id],
+    );
+
+    // Get cart items with product details for pricing
+    const rawItems = await getCartItemsWithProductDetails(cart.id);
+
+    // Calculate pricing with the coupon
+    const pricing = await applyCartPricingLogic({
+      items: rawItems,
+      coupon,
+      user_id,
+    });
+
+    // Also update cart items with coupon discount amounts
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+
+      // Update each cart item's coupon_discount_amount
+      for (const item of pricing.items) {
+        const discountPerUnit = item.discount_amount / item.quantity;
+        await client.query(
+          `
+          UPDATE cart_items
+          SET coupon_discount_amount = $1
+          WHERE id = $2
+          `,
+          [discountPerUnit, item.cart_item_id],
+        );
+      }
+
+      await client.query("COMMIT");
+    } catch (err) {
+      await client.query("ROLLBACK");
+      throw err;
+    } finally {
+      client.release();
+    }
+
+    res.json({
+      message: "Coupon applied successfully",
+      pricing: {
+        total_original: pricing.total_original_cost,
+        total_discount: pricing.total_discount_amount,
+        subtotal: pricing.subtotal,
+        tax_amount: pricing.tax_amount,
+        tax_rate: pricing.tax_rate,
+        final_total: pricing.final_total,
+        applied_coupon: pricing.applied_coupon,
+      },
+    });
   } catch (err) {
     next(err);
   }

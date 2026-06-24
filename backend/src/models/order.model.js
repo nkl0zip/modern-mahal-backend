@@ -84,10 +84,11 @@ const createOrderFromCart = async (
       discountAmount += manualDiscount + couponDiscount;
     }
 
-    // 2. Calculate tax and shipping (example: 5% tax, free shipping)
-    const taxRate = 0.05;
+    // 2. Calculate tax (18% GST on total after discounts) and shipping
+    // Note: totalAmount already includes discounts applied
+    const TAX_RATE = 0.18; // 18% GST
     const shippingAmount = 0;
-    const taxAmount = Math.round(totalAmount * taxRate * 100) / 100;
+    const taxAmount = Math.round(totalAmount * TAX_RATE * 100) / 100;
     const grandTotal = totalAmount + taxAmount + shippingAmount;
 
     // 3. Generate order number
@@ -611,14 +612,11 @@ const createOrderWithDelivery = async ({
         parseFloat(method.charge_per_km || 0) * deliveryData.distance;
     }
 
-    // 4. Calculate tax (5%)
-    const taxRate = 0.05;
-    const taxAmount =
-      Math.round(
-        (totalAmount - discountAmount + deliveryCharge) * taxRate * 100,
-      ) / 100;
-    const grandTotal =
-      totalAmount - discountAmount + deliveryCharge + taxAmount;
+    // 4. Calculate tax (18% GST on subtotal after discounts)
+    const TAX_RATE = 0.18; // 18% GST
+    const subtotal = totalAmount - discountAmount;
+    const taxAmount = Math.round(subtotal * TAX_RATE * 100) / 100;
+    const grandTotal = subtotal + deliveryCharge + taxAmount;
 
     // 5. Generate order number
     const orderNumber = generateOrderNumber();
