@@ -33,11 +33,11 @@ router.post(
 router.get("/status/:orderId", paymentController.getPaymentStatus);
 
 // ============= NEW PAYMENT SPLIT ROUTES =============
-// POST /api/payments/calculate-split - Calculate payment splits
+// POST /api/payments/calculate-split - Calculate payment splits from cart
 router.post(
   "/calculate-split",
+  authenticateToken,
   [
-    body("order_id").isUUID().withMessage("Valid order ID is required"),
     body("selected_payment_methods")
       .isArray()
       .withMessage("Payment methods must be an array"),

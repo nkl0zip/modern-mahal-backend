@@ -361,19 +361,13 @@ const getPaymentStatus = async (req, res) => {
 
 /**
  * POST /api/payments/calculate-split
- * Calculate payment splits for an order
+ * Calculate payment splits from cart (pre-checkout)
+ * No database entries are created
  */
 const calculatePaymentSplits = async (req, res, next) => {
   try {
-    const { order_id, selected_payment_methods } = req.body;
     const userId = req.user.id;
-
-    if (!order_id) {
-      return res.status(400).json({
-        success: false,
-        message: "Order ID is required",
-      });
-    }
+    const { selected_payment_methods } = req.body;
 
     if (
       !selected_payment_methods ||
@@ -392,23 +386,44 @@ const calculatePaymentSplits = async (req, res, next) => {
       if (!validMethods.includes(method.type)) {
         return res.status(400).json({
           success: false,
-          message: `Invalid payment method: ${method.type}`,
+          message: `Invalid payment method: ${method.type}. Valid methods: ${validMethods.join(", ")}`,
         });
+      }
+
+      // Validate PAY_LATER amount if provided
+      if (method.type === "PAY_LATER" && method.amount) {
+        if (isNaN(method.amount) || method.amount <= 0) {
+          return res.status(400).json({
+            success: false,
+            message: "PAY_LATER amount must be a positive number",
+          });
+        }
+      }
+
+      // Validate CASH amount if provided
+      if (method.type === "CASH" && method.amount) {
+        if (isNaN(method.amount) || method.amount <= 0) {
+          return res.status(400).json({
+            success: false,
+            message: "CASH amount must be a positive number",
+          });
+        }
       }
     }
 
-    const splits = await paymentService.calculatePaymentSplits(
-      order_id,
+    // Calculate splits from cart
+    const result = await paymentService.calculateCartPaymentSplits({
       userId,
-      selected_payment_methods,
-    );
+      selectedPaymentMethods: selected_payment_methods,
+    });
 
     res.status(200).json({
       success: true,
       message: "Payment splits calculated successfully",
-      data: splits,
+      data: result,
     });
   } catch (err) {
+    console.error("Calculate payment splits error:", err);
     next(err);
   }
 };

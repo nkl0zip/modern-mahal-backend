@@ -7,94 +7,147 @@ const { getUserPayLaterDetails } = require("../models/paylater.model");
 
 class PaymentService {
   /**
-   * Calculate payment splits for order
+   * Calculate payment splits from cart (without saving to database)
+   * Used before checkout to preview payment distribution
    */
-  async calculatePaymentSplits(
-    orderId,
-    userId,
-    selectedPaymentMethods,
-    client = null,
-  ) {
-    // Use the provided client or fallback to a new connection
-    const useExistingClient = client !== null;
-    const db = client || (await pool.connect());
-
+  async calculateCartPaymentSplits({ userId, selectedPaymentMethods }) {
     try {
-      // Only begin transaction if we're using our own connection
-      if (!useExistingClient) {
-        await db.query("BEGIN");
-      }
-
-      // Get order details
-      const orderResult = await db.query(
-        `SELECT grand_total FROM orders WHERE id = $1 AND user_id = $2`,
-        [orderId, userId],
+      // Get user's cart
+      const cartResult = await pool.query(
+        `SELECT id FROM cart WHERE user_id = $1 LIMIT 1`,
+        [userId],
       );
 
-      if (orderResult.rows.length === 0) {
-        throw new Error("Order not found");
+      if (cartResult.rows.length === 0) {
+        throw new Error("Cart not found");
       }
 
-      const grandTotal = parseFloat(orderResult.rows[0].grand_total);
+      const cartId = cartResult.rows[0].id;
+
+      // Get cart items with pricing
+      const cartItemsResult = await pool.query(
+        `
+      SELECT 
+        ci.variant_id,
+        pv.product_id,
+        ci.quantity,
+        ci.unit_price_snapshot,
+        ci.manual_discount_amount,
+        ci.coupon_discount_amount
+      FROM cart_items ci
+      JOIN product_variants pv ON ci.variant_id = pv.id
+      WHERE ci.cart_id = $1
+      `,
+        [cartId],
+      );
+
+      if (cartItemsResult.rows.length === 0) {
+        throw new Error("Cart is empty");
+      }
+
+      // Calculate cart totals
+      let totalAmount = 0;
+      let discountAmount = 0;
+
+      for (const item of cartItemsResult.rows) {
+        const unitPrice = parseFloat(item.unit_price_snapshot) || 0;
+        const manualDiscount = parseFloat(item.manual_discount_amount) || 0;
+        const couponDiscount = parseFloat(item.coupon_discount_amount) || 0;
+        const quantity = parseInt(item.quantity) || 0;
+
+        const itemTotal =
+          unitPrice * quantity - manualDiscount - couponDiscount;
+        totalAmount += itemTotal;
+        discountAmount += manualDiscount + couponDiscount;
+      }
+
+      // Calculate tax (18% GST on subtotal after discounts)
+      const TAX_RATE = 0.18;
+      const subtotal = totalAmount - discountAmount;
+      const taxAmount = Math.round(subtotal * TAX_RATE * 100) / 100;
+      const grandTotal = subtotal + taxAmount;
+
+      // Get user's pay later details
+      const userDetails = await getUserPayLaterDetails(userId);
+      const availableCredit = parseFloat(userDetails?.available_credit || 0);
+      const slabLimit = parseFloat(userDetails?.total_credit_limit || 0);
+
+      // Calculate splits based on selected payment methods
       let remainingAmount = grandTotal;
       const splits = [];
+      let usedPayLater = 0;
 
-      // Process each payment method
-      for (const method of selectedPaymentMethods) {
-        let amount = 0;
+      // Process PAY_LATER first (if selected)
+      const payLaterMethod = selectedPaymentMethods.find(
+        (m) => m.type === "PAY_LATER",
+      );
 
-        if (method.type === "PAY_LATER") {
-          // Check user's available pay later credit
-          const userDetails = await getUserPayLaterDetails(userId);
-          const availableCredit = parseFloat(userDetails.available_credit || 0);
+      if (payLaterMethod) {
+        let payLaterAmount = 0;
 
-          // User wants to use pay later
-          if (method.amount) {
-            amount = Math.min(
-              parseFloat(method.amount),
-              availableCredit,
-              remainingAmount,
-            );
-          } else {
-            // Use available credit up to remaining amount
-            amount = Math.min(availableCredit, remainingAmount);
-          }
+        if (payLaterMethod.amount) {
+          // User specified an amount
+          payLaterAmount = Math.min(
+            parseFloat(payLaterMethod.amount),
+            availableCredit,
+            remainingAmount,
+          );
+        } else {
+          // Use all available credit up to remaining amount
+          payLaterAmount = Math.min(availableCredit, remainingAmount);
+        }
 
-          if (amount > 0) {
-            splits.push({
-              payment_method: "PAY_LATER",
-              amount: amount,
-              slab_id: userDetails.slab_id,
-              metadata: {
-                available_credit_before: availableCredit,
-              },
-            });
-            remainingAmount -= amount;
-          }
-        } else if (method.type === "PHONEPE") {
-          // PhonePe payment for remaining amount
-          if (remainingAmount > 0) {
-            splits.push({
-              payment_method: "PHONEPE",
-              amount: remainingAmount,
-              metadata: {
-                is_remaining: true,
-              },
-            });
-            remainingAmount = 0;
-          }
-        } else if (method.type === "CASH") {
-          // Cash payment (admin recorded)
-          if (method.amount && method.amount <= remainingAmount) {
-            splits.push({
-              payment_method: "CASH",
-              amount: parseFloat(method.amount),
-              metadata: {
-                is_admin_recorded: true,
-              },
-            });
-            remainingAmount -= parseFloat(method.amount);
-          }
+        if (payLaterAmount > 0) {
+          splits.push({
+            payment_method: "PAY_LATER",
+            amount: payLaterAmount,
+            available_credit: availableCredit,
+            remaining_credit_after: availableCredit - payLaterAmount,
+            slab_limit: slabLimit,
+            metadata: {
+              available_credit_before: availableCredit,
+              slab_limit: slabLimit,
+            },
+          });
+          remainingAmount -= payLaterAmount;
+          usedPayLater = payLaterAmount;
+        }
+      }
+
+      // Process PHONEPE (if selected and remaining amount > 0)
+      const phonePeMethod = selectedPaymentMethods.find(
+        (m) => m.type === "PHONEPE",
+      );
+
+      if (phonePeMethod && remainingAmount > 0) {
+        splits.push({
+          payment_method: "PHONEPE",
+          amount: remainingAmount,
+          metadata: {
+            is_remaining: true,
+            remaining_after_paylater: remainingAmount,
+          },
+        });
+        remainingAmount = 0;
+      }
+
+      // Process CASH (if selected and remaining amount > 0)
+      const cashMethod = selectedPaymentMethods.find((m) => m.type === "CASH");
+
+      if (cashMethod && cashMethod.amount && remainingAmount > 0) {
+        const cashAmount = Math.min(
+          parseFloat(cashMethod.amount),
+          remainingAmount,
+        );
+        if (cashAmount > 0) {
+          splits.push({
+            payment_method: "CASH",
+            amount: cashAmount,
+            metadata: {
+              is_admin_recorded: true,
+            },
+          });
+          remainingAmount -= cashAmount;
         }
       }
 
@@ -106,56 +159,52 @@ class PaymentService {
         );
       }
 
-      // Create payment split records - use the same client
-      const createdSplits = [];
-      for (const split of splits) {
-        const created = await this.createPaymentSplitWithClient({
-          orderId: orderId,
-          paymentMethod: split.payment_method,
-          amount: split.amount,
-          slabId: split.slab_id || null,
-          metadata: split.metadata || {},
-          client: db,
-        });
-        createdSplits.push(created);
-      }
-
-      // Update order with selected payment method
+      // Determine selected payment method type
       let selectedMethodType = "MIXED";
       if (splits.length === 1) {
         selectedMethodType = splits[0].payment_method;
       }
 
-      await db.query(
-        `
-        UPDATE orders
-        SET selected_payment_method = $1, updated_at = CURRENT_TIMESTAMP
-        WHERE id = $2
-        `,
-        [selectedMethodType, orderId],
-      );
-
-      // Only commit if we started the transaction
-      if (!useExistingClient) {
-        await db.query("COMMIT");
-      }
+      // Check if pay-later can cover the full amount
+      const canPayFullWithPayLater =
+        availableCredit >= grandTotal && usedPayLater > 0;
 
       return {
-        splits: createdSplits,
-        total: grandTotal,
-        selected_method: selectedMethodType,
+        cart_id: cartId,
+        grand_total: grandTotal,
+        subtotal: subtotal,
+        tax_amount: taxAmount,
+        tax_rate: TAX_RATE * 100,
+        total_discount: discountAmount,
+        payment_methods: selectedPaymentMethods,
+        selected_method_type: selectedMethodType,
+        splits: splits,
+        summary: {
+          total_to_pay: grandTotal,
+          total_split_amount: totalSplitAmount,
+          remaining_after_splits: remainingAmount,
+          pay_later_used: usedPayLater,
+          phonepe_amount:
+            splits.find((s) => s.payment_method === "PHONEPE")?.amount || 0,
+          cash_amount:
+            splits.find((s) => s.payment_method === "CASH")?.amount || 0,
+          pay_later_available: availableCredit,
+          can_pay_full_with_paylater: canPayFullWithPayLater,
+          has_sufficient_balance: usedPayLater <= availableCredit,
+        },
+        validation: {
+          is_valid: remainingAmount === 0,
+          errors:
+            remainingAmount > 0
+              ? [
+                  `Payment methods do not cover the full amount. Remaining: ₹${remainingAmount.toFixed(2)}`,
+                ]
+              : [],
+        },
       };
     } catch (error) {
-      // Only rollback if we started the transaction
-      if (!useExistingClient) {
-        await db.query("ROLLBACK");
-      }
+      console.error("Error calculating cart payment splits:", error);
       throw error;
-    } finally {
-      // Only release if we created our own connection
-      if (!useExistingClient && db.release) {
-        db.release();
-      }
     }
   }
 
