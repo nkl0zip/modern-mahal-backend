@@ -8,6 +8,7 @@ const {
   updateCartItemQuantity,
   removeCartItem,
   clearCart,
+  getTemplateItemsInCart,
 } = require("../models/cart.model");
 
 const { getValidCouponByCode } = require("../models/staff/discount.model");
@@ -158,8 +159,36 @@ const clearCartHandler = async (req, res, next) => {
     const cart = await getCartByUser(req.user.id);
     if (!cart) return res.status(404).json({ message: "Cart not found" });
 
+    // Get template items that are IN_CART before clearing
+    const templateItems = await getTemplateItemsInCart(cart.id);
+
+    // Clear the cart
     await clearCart(cart.id);
-    res.json({ message: "Cart cleared" });
+
+    // Restore template items status back to ACTIVE
+    if (templateItems.length > 0) {
+      // Using pool directly since we're in the controller
+      const pool = require("../config/db");
+      for (const item of templateItems) {
+        await pool.query(
+          `
+          UPDATE order_template_items
+          SET 
+            status = 'ACTIVE',
+            last_status_date = CURRENT_TIMESTAMP,
+            moved_to_cart_at = NULL,
+            moved_cart_id = NULL
+          WHERE id = $1
+          `,
+          [item.template_item_id],
+        );
+      }
+    }
+
+    res.json({
+      message: "Cart cleared successfully",
+      restored_items: templateItems.length,
+    });
   } catch (err) {
     next(err);
   }

@@ -214,6 +214,27 @@ const getItemWithDetails = async (item_id) => {
   return rows[0] || null;
 };
 
+/**
+ * Update item status and moved_to_cart_at timestamp
+ * Specifically for moving items to cart
+ */
+const moveItemToCart = async (item_id, cart_id) => {
+  const { rows } = await pool.query(
+    `
+    UPDATE order_template_items
+    SET 
+      status = 'IN_CART',
+      last_status_date = CURRENT_TIMESTAMP,
+      moved_to_cart_at = CURRENT_TIMESTAMP,
+      moved_cart_id = $2
+    WHERE id = $1
+    RETURNING *;
+    `,
+    [item_id, cart_id],
+  );
+  return rows[0] || null;
+};
+
 module.exports = {
   addItemToTemplate,
   getTemplateItems,
@@ -221,4 +242,5 @@ module.exports = {
   updateItemStatus,
   removeItemFromTemplate,
   getItemWithDetails,
+  moveItemToCart,
 };

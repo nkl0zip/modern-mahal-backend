@@ -10,7 +10,7 @@ const findOrCreateCartByUser = async (user_id) => {
 
     const found = await client.query(
       `SELECT * FROM cart WHERE user_id = $1 LIMIT 1`,
-      [user_id]
+      [user_id],
     );
 
     if (found.rows.length) {
@@ -20,7 +20,7 @@ const findOrCreateCartByUser = async (user_id) => {
 
     const inserted = await client.query(
       `INSERT INTO cart (user_id) VALUES ($1) RETURNING *`,
-      [user_id]
+      [user_id],
     );
 
     await client.query("COMMIT");
@@ -39,7 +39,7 @@ const findOrCreateCartByUser = async (user_id) => {
 const getCartByUser = async (user_id) => {
   const { rows } = await pool.query(
     `SELECT * FROM cart WHERE user_id = $1 LIMIT 1`,
-    [user_id]
+    [user_id],
   );
   return rows[0] || null;
 };
@@ -106,7 +106,7 @@ const addOrUpdateCartItem = async ({ cart_id, variant_id, quantity }) => {
     // Validate variant & get price
     const variantRes = await client.query(
       `SELECT id, mrp, status FROM product_variants WHERE id = $1 LIMIT 1`,
-      [variant_id]
+      [variant_id],
     );
 
     if (!variantRes.rows.length)
@@ -128,7 +128,7 @@ const addOrUpdateCartItem = async ({ cart_id, variant_id, quantity }) => {
       WHERE cart_id = $1 AND variant_id = $2
       LIMIT 1
       `,
-      [cart_id, variant_id]
+      [cart_id, variant_id],
     );
 
     if (existing.rows.length) {
@@ -142,7 +142,7 @@ const addOrUpdateCartItem = async ({ cart_id, variant_id, quantity }) => {
         WHERE id = $2
         RETURNING *;
         `,
-        [newQty, existing.rows[0].id]
+        [newQty, existing.rows[0].id],
       );
 
       await client.query("COMMIT");
@@ -157,7 +157,7 @@ const addOrUpdateCartItem = async ({ cart_id, variant_id, quantity }) => {
       VALUES ($1, $2, $3, $4)
       RETURNING *;
       `,
-      [cart_id, variant_id, qty, variant.mrp]
+      [cart_id, variant_id, qty, variant.mrp],
     );
 
     await client.query("COMMIT");
@@ -180,7 +180,7 @@ const updateCartItemQuantity = async (cart_item_id, quantity) => {
   if (qty === 0) {
     const { rows } = await pool.query(
       `DELETE FROM cart_items WHERE id = $1 RETURNING *`,
-      [cart_item_id]
+      [cart_item_id],
     );
     return rows[0] || null;
   }
@@ -193,7 +193,7 @@ const updateCartItemQuantity = async (cart_item_id, quantity) => {
     WHERE id = $2
     RETURNING *;
     `,
-    [qty, cart_item_id]
+    [qty, cart_item_id],
   );
 
   return rows[0] || null;
@@ -205,7 +205,7 @@ const updateCartItemQuantity = async (cart_item_id, quantity) => {
 const removeCartItem = async (cart_item_id) => {
   const { rows } = await pool.query(
     `DELETE FROM cart_items WHERE id = $1 RETURNING *`,
-    [cart_item_id]
+    [cart_item_id],
   );
   return rows[0] || null;
 };
@@ -220,7 +220,7 @@ const clearCart = async (cart_id) => {
     await client.query(`DELETE FROM cart_items WHERE cart_id = $1`, [cart_id]);
     await client.query(
       `UPDATE cart SET updated_at = CURRENT_TIMESTAMP WHERE id = $1`,
-      [cart_id]
+      [cart_id],
     );
     await client.query("COMMIT");
     return true;
@@ -232,6 +232,31 @@ const clearCart = async (cart_id) => {
   }
 };
 
+/**
+ * Get all template items that are currently IN_CART for a cart
+ * Used when clearing cart to restore template items
+ */
+const getTemplateItemsInCart = async (cart_id) => {
+  const { rows } = await pool.query(
+    `
+    SELECT 
+      ci.id as cart_item_id,
+      oti.id as template_item_id,
+      oti.template_id,
+      oti.status as current_status,
+      ci.quantity as cart_quantity,
+      oti.quantity as template_quantity
+    FROM cart_items ci
+    INNER JOIN order_template_items oti ON ci.source_template_item_id = oti.id
+    WHERE ci.cart_id = $1 
+      AND ci.source_type = 'TEMPLATE'
+      AND oti.status = 'IN_CART'
+    `,
+    [cart_id],
+  );
+  return rows;
+};
+
 module.exports = {
   findOrCreateCartByUser,
   getCartByUser,
@@ -240,4 +265,5 @@ module.exports = {
   updateCartItemQuantity,
   removeCartItem,
   clearCart,
+  getTemplateItemsInCart,
 };

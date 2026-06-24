@@ -8,14 +8,15 @@ const { recalculateCart } = require("./cartPricing.service");
 const moveTemplateItemsToCart = async ({
   template_id,
   user_id,
-  item_ids,
-  mode,
+  item_ids, // This can be an array of specific item IDs or null for all
+  mode = "COMBINE", // 'COMBINE' or 'REPLACE'
 }) => {
   const client = await pool.connect();
 
   try {
     await client.query("BEGIN");
 
+    // Check template exists and belongs to user
     const { rows: templateRows } = await client.query(
       `SELECT * FROM order_templates WHERE id = $1 AND user_id = $2 AND is_deleted = false`,
       [template_id, user_id],
@@ -31,20 +32,27 @@ const moveTemplateItemsToCart = async ({
       throw { status: 400, message: "Cannot move cancelled template" };
     }
 
-    const { rows: items } = await client.query(
-      `
+    // Modified query to include both ACTIVE and IN_CART items
+    let query = `
       SELECT * FROM order_template_items
       WHERE template_id = $1
-        AND status = 'ACTIVE'
-        ${item_ids && item_ids.length ? `AND id = ANY($2)` : ""}
-    `,
-      item_ids && item_ids.length ? [template_id, item_ids] : [template_id],
-    );
+        AND status IN ('ACTIVE', 'IN_CART')
+    `;
+
+    let params = [template_id];
+
+    if (item_ids && item_ids.length) {
+      query += ` AND id = ANY($2)`;
+      params.push(item_ids);
+    }
+
+    const { rows: items } = await client.query(query, params);
 
     if (!items.length) {
       throw { status: 400, message: "No valid items to move" };
     }
 
+    // Get or create cart
     const { rows: cartRows } = await client.query(
       `SELECT * FROM cart WHERE user_id = $1 LIMIT 1`,
       [user_id],
@@ -63,6 +71,7 @@ const moveTemplateItemsToCart = async ({
     }
 
     if (mode === "REPLACE") {
+      // If replacing, clear the cart
       await client.query(`DELETE FROM cart_items WHERE cart_id = $1`, [
         cart.id,
       ]);
@@ -73,15 +82,18 @@ const moveTemplateItemsToCart = async ({
       );
     }
 
+    // Get template discounts
     const discounts = await getTemplateManualDiscounts(template_id, user_id);
 
     const { items: discountedItems } = applyTemplateDiscounts(items, discounts);
 
+    // Process each item
     for (const item of discountedItems) {
       const manual_per_unit =
         Number(item.unit_price_snapshot) -
         Number(item.discounted_price || item.unit_price_snapshot);
 
+      // Check if item already exists in cart
       const existingRes = await client.query(
         `
         SELECT * FROM cart_items
@@ -133,6 +145,7 @@ const moveTemplateItemsToCart = async ({
         );
       }
 
+      // Update template item status - this will work even if already IN_CART
       await client.query(
         `
         UPDATE order_template_items
@@ -159,6 +172,10 @@ const moveTemplateItemsToCart = async ({
   } finally {
     client.release();
   }
+};
+
+module.exports = {
+  moveTemplateItemsToCart,
 };
 
 module.exports = {
