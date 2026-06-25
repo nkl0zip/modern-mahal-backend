@@ -7,6 +7,8 @@ const http = require("http");
 const { initializeSocket } = require("./config/socket");
 const fs = require("fs");
 
+const { startCleanupScheduler } = require("./jobs/cleanupOrders.job");
+
 const authRoutes = require("./routes/auth.routes");
 const profileRoutes = require("./routes/profile.routes");
 const categoryRoutes = require("./routes/admin/category.routes");
@@ -49,6 +51,8 @@ app.use(cors());
 app.use(express.json());
 app.use(bodyParser.json());
 app.use(bodyParser.urlencoded({ extended: true }));
+
+startCleanupScheduler();
 
 // Routes
 app.use("/api/profile", profileRoutes);
