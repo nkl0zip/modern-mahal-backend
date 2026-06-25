@@ -602,12 +602,75 @@ const createOrderWithDelivery = async ({
     }
 
     // ============================================
-    // STEP 2: Calculate totals
+    // STEP 2: Calculate totals with discounts
     // ============================================
     let totalAmount = 0;
     let discountAmount = 0;
     let totalManualDiscount = 0;
     let totalCouponDiscount = 0;
+
+    // Get coupon details if applied
+    let coupon = null;
+    if (appliedCouponId) {
+      const couponResult = await client.query(
+        `
+    SELECT d.*, COALESCE(
+      json_agg(
+        DISTINCT jsonb_build_object(
+          'id', s.id,
+          'name', s.name
+        )
+      ) FILTER (WHERE s.id IS NOT NULL),
+      '[]'
+    ) as segments
+    FROM discounts d
+    LEFT JOIN discount_segments ds ON ds.discount_id = d.id
+    LEFT JOIN segments s ON s.id = ds.segment_id
+    WHERE d.id = $1 AND d.type = 'COUPON' AND d.is_active = true AND d.expires_at > NOW()
+    GROUP BY d.id
+    `,
+        [appliedCouponId],
+      );
+      if (couponResult.rows.length > 0) {
+        coupon = couponResult.rows[0];
+      }
+    }
+
+    // Get product segments for coupon eligibility
+    const productIds = [
+      ...new Set(cartItemsResult.rows.map((item) => item.product_id)),
+    ];
+    let productSegmentMap = {};
+
+    if (productIds.length > 0 && coupon) {
+      const segmentQuery = `
+    SELECT 
+      ps.product_id,
+      ps.segment_id
+    FROM product_segments ps
+    WHERE ps.product_id = ANY($1)
+  `;
+      const segmentResult = await client.query(segmentQuery, [productIds]);
+
+      segmentResult.rows.forEach((row) => {
+        if (!productSegmentMap[row.product_id]) {
+          productSegmentMap[row.product_id] = new Set();
+        }
+        productSegmentMap[row.product_id].add(row.segment_id);
+      });
+    }
+
+    // Get coupon segments if coupon exists
+    let couponSegmentIds = new Set();
+    if (coupon) {
+      const couponSegmentsResult = await client.query(
+        `SELECT segment_id FROM discount_segments WHERE discount_id = $1`,
+        [coupon.id],
+      );
+      couponSegmentIds = new Set(
+        couponSegmentsResult.rows.map((r) => r.segment_id),
+      );
+    }
 
     for (const item of cartItemsResult.rows) {
       const unitPrice = parseFloat(item.unit_price_snapshot) || 0;
@@ -615,11 +678,43 @@ const createOrderWithDelivery = async ({
       const couponDiscount = parseFloat(item.coupon_discount_amount) || 0;
       const quantity = parseInt(item.quantity) || 0;
 
-      const itemTotal = unitPrice * quantity - manualDiscount - couponDiscount;
-      totalAmount += itemTotal;
-      discountAmount += manualDiscount + couponDiscount;
-      totalManualDiscount += manualDiscount;
-      totalCouponDiscount += couponDiscount;
+      const originalTotal = unitPrice * quantity;
+      let itemDiscount = 0;
+
+      // Check if coupon applies to this product
+      let isCouponEligible = false;
+      if (coupon) {
+        const productSegments = productSegmentMap[item.product_id] || new Set();
+        isCouponEligible =
+          couponSegmentIds.size === 0 ||
+          [...productSegments].some((segId) => couponSegmentIds.has(segId));
+      }
+
+      // Apply coupon discount if eligible
+      if (isCouponEligible && coupon) {
+        if (coupon.discount_mode === "PERCENTAGE") {
+          itemDiscount = (originalTotal * Number(coupon.value)) / 100;
+        } else if (coupon.discount_mode === "FLAT") {
+          itemDiscount = Math.min(Number(coupon.value), originalTotal);
+        }
+        discountAmount += itemDiscount;
+        totalCouponDiscount += itemDiscount;
+        totalAmount += originalTotal - itemDiscount;
+      } else {
+        // Apply manual discount only (coupon not applicable)
+        const itemManualDiscount = manualDiscount * quantity;
+        discountAmount += itemManualDiscount;
+        totalManualDiscount += itemManualDiscount;
+        totalAmount += originalTotal - itemManualDiscount;
+
+        // Also add any existing coupon discount from cart_items if coupon is not applied globally
+        if (!coupon) {
+          const itemCouponDiscount = couponDiscount * quantity;
+          discountAmount += itemCouponDiscount;
+          totalCouponDiscount += itemCouponDiscount;
+          totalAmount -= itemCouponDiscount;
+        }
+      }
     }
 
     // ============================================

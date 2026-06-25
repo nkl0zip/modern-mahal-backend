@@ -14,7 +14,7 @@ class PaymentService {
     try {
       // Get user's cart
       const cartResult = await pool.query(
-        `SELECT id FROM cart WHERE user_id = $1 LIMIT 1`,
+        `SELECT id, applied_coupon_id FROM cart WHERE user_id = $1 LIMIT 1`,
         [userId],
       );
 
@@ -23,6 +23,7 @@ class PaymentService {
       }
 
       const cartId = cartResult.rows[0].id;
+      const appliedCouponId = cartResult.rows[0].applied_coupon_id;
 
       // Get cart items with pricing
       const cartItemsResult = await pool.query(
@@ -45,9 +46,73 @@ class PaymentService {
         throw new Error("Cart is empty");
       }
 
-      // Calculate cart totals
+      // Get coupon details if applied
+      let coupon = null;
+      if (appliedCouponId) {
+        const couponResult = await pool.query(
+          `
+        SELECT d.*, COALESCE(
+          json_agg(
+            DISTINCT jsonb_build_object(
+              'id', s.id,
+              'name', s.name
+            )
+          ) FILTER (WHERE s.id IS NOT NULL),
+          '[]'
+        ) as segments
+        FROM discounts d
+        LEFT JOIN discount_segments ds ON ds.discount_id = d.id
+        LEFT JOIN segments s ON s.id = ds.segment_id
+        WHERE d.id = $1 AND d.type = 'COUPON' AND d.is_active = true AND d.expires_at > NOW()
+        GROUP BY d.id
+        `,
+          [appliedCouponId],
+        );
+        if (couponResult.rows.length > 0) {
+          coupon = couponResult.rows[0];
+        }
+      }
+
+      // Get product segments for coupon eligibility
+      const productIds = [
+        ...new Set(cartItemsResult.rows.map((item) => item.product_id)),
+      ];
+      let productSegmentMap = {};
+
+      if (productIds.length > 0) {
+        const segmentQuery = `
+        SELECT 
+          ps.product_id,
+          ps.segment_id
+        FROM product_segments ps
+        WHERE ps.product_id = ANY($1)
+      `;
+        const segmentResult = await pool.query(segmentQuery, [productIds]);
+
+        segmentResult.rows.forEach((row) => {
+          if (!productSegmentMap[row.product_id]) {
+            productSegmentMap[row.product_id] = new Set();
+          }
+          productSegmentMap[row.product_id].add(row.segment_id);
+        });
+      }
+
+      // Get coupon segments if coupon exists
+      let couponSegmentIds = new Set();
+      if (coupon) {
+        const couponSegmentsResult = await pool.query(
+          `SELECT segment_id FROM discount_segments WHERE discount_id = $1`,
+          [coupon.id],
+        );
+        couponSegmentIds = new Set(
+          couponSegmentsResult.rows.map((r) => r.segment_id),
+        );
+      }
+
+      // Calculate cart totals with discounts
       let totalAmount = 0;
       let discountAmount = 0;
+      let subtotal = 0;
 
       for (const item of cartItemsResult.rows) {
         const unitPrice = parseFloat(item.unit_price_snapshot) || 0;
@@ -55,15 +120,45 @@ class PaymentService {
         const couponDiscount = parseFloat(item.coupon_discount_amount) || 0;
         const quantity = parseInt(item.quantity) || 0;
 
-        const itemTotal =
-          unitPrice * quantity - manualDiscount - couponDiscount;
-        totalAmount += itemTotal;
-        discountAmount += manualDiscount + couponDiscount;
+        const originalTotal = unitPrice * quantity;
+        let itemDiscount = 0;
+
+        // Check if coupon applies to this product
+        let isCouponEligible = false;
+        if (coupon) {
+          const productSegments =
+            productSegmentMap[item.product_id] || new Set();
+          isCouponEligible =
+            couponSegmentIds.size === 0 ||
+            [...productSegments].some((segId) => couponSegmentIds.has(segId));
+        }
+
+        // Apply coupon discount if eligible
+        if (isCouponEligible && coupon) {
+          if (coupon.discount_mode === "PERCENTAGE") {
+            itemDiscount = (originalTotal * Number(coupon.value)) / 100;
+          } else if (coupon.discount_mode === "FLAT") {
+            itemDiscount = Math.min(Number(coupon.value), originalTotal);
+          }
+          // Use coupon discount, ignore manual discount for this item
+          discountAmount += itemDiscount;
+          subtotal += originalTotal - itemDiscount;
+        } else {
+          // Apply manual discount only (coupon not applicable)
+          const itemManualDiscount = manualDiscount * quantity;
+          discountAmount += itemManualDiscount;
+          subtotal += originalTotal - itemManualDiscount;
+          // Also add any existing coupon discount from cart_items if coupon is not applied globally
+          if (!coupon) {
+            const itemCouponDiscount = couponDiscount * quantity;
+            discountAmount += itemCouponDiscount;
+            subtotal -= itemCouponDiscount;
+          }
+        }
       }
 
       // Calculate tax (18% GST on subtotal after discounts)
       const TAX_RATE = 0.18;
-      const subtotal = totalAmount - discountAmount;
       const taxAmount = Math.round(subtotal * TAX_RATE * 100) / 100;
       const grandTotal = subtotal + taxAmount;
 
@@ -169,6 +264,20 @@ class PaymentService {
       const canPayFullWithPayLater =
         availableCredit >= grandTotal && usedPayLater > 0;
 
+      // Get coupon details for response
+      let couponDetails = null;
+      if (coupon) {
+        couponDetails = {
+          id: coupon.id,
+          coupon_code: coupon.coupon_code,
+          discount_mode: coupon.discount_mode,
+          value: coupon.value,
+          type: coupon.type,
+          expires_at: coupon.expires_at,
+          segments: coupon.segments || [],
+        };
+      }
+
       return {
         cart_id: cartId,
         grand_total: grandTotal,
@@ -176,6 +285,7 @@ class PaymentService {
         tax_amount: taxAmount,
         tax_rate: TAX_RATE * 100,
         total_discount: discountAmount,
+        applied_coupon: couponDetails,
         payment_methods: selectedPaymentMethods,
         selected_method_type: selectedMethodType,
         splits: splits,
