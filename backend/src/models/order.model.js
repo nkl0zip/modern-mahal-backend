@@ -1,4 +1,5 @@
 const pool = require("../config/db");
+const paymentModel = require("../models/payment.model");
 
 /**
  * Generate a unique order number
@@ -186,10 +187,21 @@ const getOrderById = async (orderId) => {
           'created_at', p.created_at
         )) FILTER (WHERE p.id IS NOT NULL),
         '[]'
-      ) as payments
+      ) as payments,
+      COALESCE(
+        json_agg(DISTINCT jsonb_build_object(
+          'id', ps.id,
+          'payment_method', ps.payment_method,
+          'amount', ps.amount,
+          'status', ps.status,
+          'completed_at', ps.completed_at
+        )) FILTER (WHERE ps.id IS NOT NULL),
+        '[]'
+      ) as payment_splits
     FROM orders o
     LEFT JOIN order_items oi ON o.id = oi.order_id
     LEFT JOIN payments p ON o.id = p.order_id
+    LEFT JOIN payment_splits ps ON o.id = ps.order_id
     WHERE o.id = $1
     GROUP BY o.id;
   `;
@@ -517,16 +529,20 @@ const getOrderRefunds = async (orderId) => {
   return rows;
 };
 
-// Also add a function to get a single order with all related data (history, notes, returns, refunds)
+/**
+ * Get full order details with all related data
+ */
 const getFullOrderDetails = async (orderId) => {
-  const order = await getOrderById(orderId); // existing
+  const order = await getOrderById(orderId);
   if (!order) return null;
+
   const [history, notes, returns, refunds] = await Promise.all([
     getOrderStatusHistory(orderId),
-    getOrderNotes(orderId, true), // include private for internal use
+    getOrderNotes(orderId, true),
     getOrderReturns(orderId),
     getOrderRefunds(orderId),
   ]);
+
   return {
     ...order,
     status_history: history,
@@ -537,14 +553,19 @@ const getFullOrderDetails = async (orderId) => {
 };
 
 /**
- * Create order from cart with delivery and payment splits
- * This is the main checkout function
+ * Create order from cart with proper flow:
+ * 1. Create order
+ * 2. Create order items
+ * 3. Process payment
+ * 4. Create delivery
+ * 5. Update order with delivery info
+ * 6. Generate pickup details if SELF
  */
 const createOrderWithDelivery = async ({
   userId,
   cartId,
-  shippingAddressId,
-  billingAddressId,
+  shippingAddressId = null,
+  billingAddressId = null,
   appliedCouponId = null,
   deliveryMethodCode,
   deliveryData = {},
@@ -556,7 +577,9 @@ const createOrderWithDelivery = async ({
   try {
     await client.query("BEGIN");
 
-    // 1. Lock cart and get items
+    // ============================================
+    // STEP 1: Lock cart and get items
+    // ============================================
     const cartItemsResult = await client.query(
       `
       SELECT 
@@ -578,9 +601,13 @@ const createOrderWithDelivery = async ({
       throw new Error("Cart is empty");
     }
 
-    // 2. Calculate totals
+    // ============================================
+    // STEP 2: Calculate totals
+    // ============================================
     let totalAmount = 0;
     let discountAmount = 0;
+    let totalManualDiscount = 0;
+    let totalCouponDiscount = 0;
 
     for (const item of cartItemsResult.rows) {
       const unitPrice = parseFloat(item.unit_price_snapshot) || 0;
@@ -591,9 +618,13 @@ const createOrderWithDelivery = async ({
       const itemTotal = unitPrice * quantity - manualDiscount - couponDiscount;
       totalAmount += itemTotal;
       discountAmount += manualDiscount + couponDiscount;
+      totalManualDiscount += manualDiscount;
+      totalCouponDiscount += couponDiscount;
     }
 
-    // 3. Get delivery method and calculate charges
+    // ============================================
+    // STEP 3: Get delivery method and calculate charges
+    // ============================================
     const deliveryMethod = await client.query(
       `SELECT * FROM delivery_methods WHERE code = $1 AND is_active = true`,
       [deliveryMethodCode],
@@ -612,20 +643,45 @@ const createOrderWithDelivery = async ({
         parseFloat(method.charge_per_km || 0) * deliveryData.distance;
     }
 
-    // 4. Calculate tax (18% GST on subtotal after discounts)
-    const TAX_RATE = 0.18; // 18% GST
-    const subtotal = totalAmount - discountAmount;
+    // ============================================
+    // STEP 4: Calculate tax (18% GST on subtotal after discounts)
+    // ============================================
+    const TAX_RATE = 0.18;
+    const subtotal = totalAmount;
     const taxAmount = Math.round(subtotal * TAX_RATE * 100) / 100;
     const grandTotal = subtotal + deliveryCharge + taxAmount;
 
-    // 5. Generate order number
+    // ============================================
+    // STEP 5: Validate shipping address (only for non-SELF)
+    // ============================================
+    let finalShippingAddressId = shippingAddressId;
+
+    if (method.code === "SELF_PICKUP") {
+      // For SELF delivery, shipping_address_id should be NULL
+      finalShippingAddressId = null;
+    } else if (!shippingAddressId) {
+      throw new Error("Shipping address is required for this delivery method");
+    }
+
+    // ============================================
+    // STEP 6: Generate order number
+    // ============================================
     const orderNumber = generateOrderNumber();
 
-    let order;
-
-    // 6. Insert order
-    try {
-      console.log("Attempting to insert order with values:", {
+    // ============================================
+    // STEP 7: Insert order (PENDING status)
+    // ============================================
+    const orderResult = await client.query(
+      `
+      INSERT INTO orders (
+        user_id, cart_id, order_number, total_amount, discount_amount,
+        tax_amount, shipping_amount, grand_total, status,
+        shipping_address_id, billing_address_id, applied_coupon_id, metadata
+      )
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'PENDING', $9, $10, $11, $12)
+      RETURNING *;
+      `,
+      [
         userId,
         cartId,
         orderNumber,
@@ -634,56 +690,18 @@ const createOrderWithDelivery = async ({
         taxAmount,
         deliveryCharge,
         grandTotal,
-        shippingAddressId,
+        finalShippingAddressId,
         billingAddressId,
         appliedCouponId,
-        metadata,
-      });
+        JSON.stringify(metadata),
+      ],
+    );
 
-      const orderResult = await client.query(
-        `
-    INSERT INTO orders (
-      user_id, cart_id, order_number, total_amount, discount_amount,
-      tax_amount, shipping_amount, grand_total, status,
-      shipping_address_id, billing_address_id, applied_coupon_id, metadata
-    )
-    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'PENDING', $9, $10, $11, $12)
-    RETURNING *;
-    `,
-        [
-          userId,
-          cartId,
-          orderNumber,
-          totalAmount,
-          discountAmount,
-          taxAmount,
-          deliveryCharge,
-          grandTotal,
-          shippingAddressId,
-          billingAddressId,
-          appliedCouponId,
-          JSON.stringify(metadata),
-        ],
-      );
+    const order = orderResult.rows[0];
 
-      // Check if order was inserted properly
-      if (!orderResult.rows || orderResult.rows.length === 0) {
-        throw new Error("Failed to create order - no rows returned");
-      }
-
-      order = orderResult.rows[0];
-
-      // Log the created order for debugging
-      console.log("Order created successfully:", order.id);
-      console.log("Order data:", order);
-    } catch (insertError) {
-      console.error("Order insertion failed - Full error:", insertError);
-      console.error("Error code:", insertError.code);
-      console.error("Error detail:", insertError.detail);
-      throw new Error(`Order insertion failed: ${insertError.message}`);
-    }
-
-    // 7. Insert order items
+    // ============================================
+    // STEP 8: Insert order items
+    // ============================================
     for (const item of cartItemsResult.rows) {
       const totalPrice =
         item.unit_price_snapshot * item.quantity -
@@ -711,18 +729,48 @@ const createOrderWithDelivery = async ({
       );
     }
 
-    // 8. Create delivery record
+    // ============================================
+    // STEP 9: Process Payment
+    // ============================================
+    const paymentService = require("../services/payment.service");
+
+    // Calculate and create payment splits
+    const paymentSplitsResult =
+      await paymentService.calculateAndProcessPaymentSplits({
+        orderId: order.id,
+        userId: userId,
+        selectedPaymentMethods: paymentMethods,
+        client: client,
+        grandTotal: grandTotal,
+      });
+
+    // ============================================
+    // STEP 10: Create Delivery (only after payment)
+    // ============================================
     const deliveryModel = require("./delivery.model");
-    const delivery = await deliveryModel.createDelivery({
+
+    let delivery = null;
+    let pickupDetails = null;
+
+    // Create delivery record
+    delivery = await deliveryModel.createDelivery({
       orderId: order.id,
       deliveryMethodId: method.id,
-      deliveryAddressId: deliveryData.addressId || null,
-      deliveryAddressText: deliveryData.addressText || null,
-      deliveryLatitude: deliveryData.latitude || null,
-      deliveryLongitude: deliveryData.longitude || null,
+      deliveryAddressId:
+        method.code === "SELF_PICKUP" ? null : deliveryData.addressId || null,
+      deliveryAddressText:
+        method.code === "SELF_PICKUP" ? null : deliveryData.addressText || null,
+      deliveryLatitude:
+        method.code === "SELF_PICKUP" ? null : deliveryData.latitude || null,
+      deliveryLongitude:
+        method.code === "SELF_PICKUP" ? null : deliveryData.longitude || null,
       deliveryNotes: deliveryData.notes || null,
-      storePickupLocationId: deliveryData.storeId || null,
-      pickupInstructions: deliveryData.pickupInstructions || null,
+      storePickupLocationId:
+        method.code === "SELF_PICKUP" ? deliveryData.storeId || null : null,
+      pickupInstructions:
+        method.code === "SELF_PICKUP"
+          ? deliveryData.pickupInstructions || null
+          : null,
       deliveryCharge: deliveryCharge,
       metadata: {
         estimated_days: method.estimated_delivery_days,
@@ -731,7 +779,9 @@ const createOrderWithDelivery = async ({
       client: client,
     });
 
-    // 9. Update order with delivery info
+    // ============================================
+    // STEP 11: Update order with delivery info
+    // ============================================
     await client.query(
       `
       UPDATE orders
@@ -745,8 +795,9 @@ const createOrderWithDelivery = async ({
       [method.id, delivery.id, deliveryCharge, order.id],
     );
 
-    // 10. For SELF_PICKUP, generate pickup details
-    let pickupDetails = null;
+    // ============================================
+    // STEP 12: For SELF_PICKUP, generate pickup details
+    // ============================================
     if (method.code === "SELF_PICKUP") {
       const storeResult = await client.query(
         `SELECT id FROM store_details WHERE is_active = true ORDER BY created_at DESC LIMIT 1`,
@@ -769,16 +820,30 @@ const createOrderWithDelivery = async ({
       };
     }
 
-    // 11. Create payment splits
-    const paymentService = require("../services/payment.service");
-    const paymentSplits = await paymentService.calculatePaymentSplits(
-      order.id,
-      userId,
-      paymentMethods,
-      client,
-    );
+    // ============================================
+    // STEP 13: Update order status based on payment
+    // ============================================
+    // Check if all splits are completed
+    const allCompleted = await paymentModel.areAllSplitsCompleted(order.id);
 
-    // 12. Clear cart
+    if (allCompleted) {
+      // If all payment splits are completed, mark order as PAID
+      await client.query(
+        `
+        UPDATE orders
+        SET 
+          payment_split_completed = true,
+          status = 'PAID',
+          updated_at = CURRENT_TIMESTAMP
+        WHERE id = $1
+        `,
+        [order.id],
+      );
+    }
+
+    // ============================================
+    // STEP 14: Clear cart (only after order is placed)
+    // ============================================
     await client.query("DELETE FROM cart_items WHERE cart_id = $1", [cartId]);
 
     await client.query("COMMIT");
@@ -787,11 +852,12 @@ const createOrderWithDelivery = async ({
       order,
       delivery,
       pickup_details: pickupDetails,
-      payment_splits: paymentSplits.splits,
+      payment_splits: paymentSplitsResult.splits,
       grand_total: grandTotal,
     };
   } catch (error) {
     await client.query("ROLLBACK");
+    console.error("Order creation failed:", error);
     throw error;
   } finally {
     client.release();

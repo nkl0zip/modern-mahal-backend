@@ -122,7 +122,7 @@ const initiatePayment = async (req, res) => {
 
 // POST /api/payments/webhook (public, no auth)
 const paymentWebhook = async (req, res) => {
-  const { response } = req.body; // PhonePe sends { response: base64encoded }
+  const { response } = req.body;
   const xVerify = req.headers["x-verify"];
 
   if (!response || !xVerify) {
@@ -154,18 +154,20 @@ const paymentWebhook = async (req, res) => {
   try {
     await client.query("BEGIN");
 
-    // 4. Find payment by merchantTransactionId (our gateway_transaction_id)
+    // 4. Find payment by merchantTransactionId
     const paymentQuery = await client.query(
       "SELECT * FROM payments WHERE gateway_transaction_id = $1 FOR UPDATE",
       [merchantTransactionId],
     );
+
     if (paymentQuery.rows.length === 0) {
       await client.query("ROLLBACK");
       return res.status(404).send("Payment not found");
     }
+
     const payment = paymentQuery.rows[0];
 
-    // 5. Idempotency: if already processed (SUCCESS or FAILED), just return OK
+    // 5. Idempotency: if already processed, just return OK
     if (payment.status === "SUCCESS" || payment.status === "FAILED") {
       await client.query("COMMIT");
       return res.status(200).send("Already processed");
@@ -188,33 +190,54 @@ const paymentWebhook = async (req, res) => {
       [payment.id, `WEBHOOK_${state}`, decoded],
     );
 
-    // 8. If payment successful, update order status to PAID
-    // In the webhook, when payment is successful, update the split status
+    // 8. If payment successful, update split status
     if (paymentStatus === "SUCCESS") {
-      // Update order status
-      await client.query(
-        `UPDATE orders SET status = 'PAID', updated_at = CURRENT_TIMESTAMP WHERE id = $1`,
-        [payment.order_id],
-      );
-
-      // Update the PhonePe split status (the split is already linked to payment)
-      await client.query(
-        `UPDATE payment_splits 
-     SET status = 'COMPLETED', 
-         completed_at = CURRENT_TIMESTAMP,
-         updated_at = CURRENT_TIMESTAMP
-     WHERE payment_id = $1`,
+      // Find the split linked to this payment
+      const splitResult = await client.query(
+        `SELECT * FROM payment_splits WHERE payment_id = $1 FOR UPDATE`,
         [payment.id],
       );
 
-      // Update order online_paid
-      await client.query(
-        `UPDATE orders 
-     SET online_paid = online_paid + $1,
-         updated_at = CURRENT_TIMESTAMP
-     WHERE id = $2`,
-        [payment.amount, payment.order_id],
+      if (splitResult.rows.length > 0) {
+        const split = splitResult.rows[0];
+
+        // Update split status
+        await client.query(
+          `UPDATE payment_splits
+           SET status = 'COMPLETED', 
+               completed_at = CURRENT_TIMESTAMP,
+               updated_at = CURRENT_TIMESTAMP
+           WHERE id = $1`,
+          [split.id],
+        );
+
+        // Update order online_paid
+        await client.query(
+          `UPDATE orders 
+           SET online_paid = online_paid + $1,
+               updated_at = CURRENT_TIMESTAMP
+           WHERE id = $2`,
+          [split.amount, split.order_id],
+        );
+      }
+
+      // Update order status if all splits are completed
+      const allCompleted = await paymentModel.areAllSplitsCompleted(
+        payment.order_id,
       );
+
+      if (allCompleted) {
+        await client.query(
+          `UPDATE orders
+           SET 
+             payment_split_completed = true,
+             status = 'PAID',
+             updated_at = CURRENT_TIMESTAMP
+           WHERE id = $1
+           AND status = 'PENDING'`,
+          [payment.order_id],
+        );
+      }
     }
 
     await client.query("COMMIT");

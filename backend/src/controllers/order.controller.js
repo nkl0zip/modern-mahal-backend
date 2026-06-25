@@ -24,27 +24,113 @@ const checkout = async (req, res) => {
     const { findOrCreateCartByUser } = require("../models/cart.model");
     const cart = await findOrCreateCartByUser(userId);
 
-    // Use the new createOrderWithDelivery function
+    // Check if cart has items
+    const { rows: cartItems } = await pool.query(
+      `SELECT COUNT(*) as count FROM cart_items WHERE cart_id = $1`,
+      [cart.id],
+    );
+
+    if (parseInt(cartItems[0].count) === 0) {
+      return res.status(400).json({
+        success: false,
+        message: "Cart is empty",
+      });
+    }
+
+    // Validate payment methods
+    if (
+      !payment_methods ||
+      !Array.isArray(payment_methods) ||
+      payment_methods.length === 0
+    ) {
+      return res.status(400).json({
+        success: false,
+        message: "At least one payment method is required",
+      });
+    }
+
+    // For SELF_PICKUP, shipping_address_id is not required
+    let finalShippingAddressId = shippingAddressId;
+
+    if (delivery_method_code === "SELF_PICKUP") {
+      finalShippingAddressId = null;
+    } else if (!shippingAddressId) {
+      return res.status(400).json({
+        success: false,
+        message: "Shipping address is required for this delivery method",
+      });
+    }
+
+    // Use the createOrderWithDelivery function
     const order = await orderModel.createOrderWithDelivery({
       userId: userId,
       cartId: cart.id,
-      shippingAddressId: shippingAddressId,
-      billingAddressId: billingAddressId,
-      appliedCouponId: appliedCouponId || null, // Explicitly handle null
+      shippingAddressId: finalShippingAddressId,
+      billingAddressId: billingAddressId || finalShippingAddressId,
+      appliedCouponId: appliedCouponId || null,
       deliveryMethodCode: delivery_method_code,
       deliveryData: {
-        // For SELF_PICKUP, we don't need address details
-        // For other methods, you'd need to pass address details
-        ...(metadata || {}),
+        addressId:
+          delivery_method_code === "SELF_PICKUP"
+            ? null
+            : metadata?.addressId || null,
+        addressText:
+          delivery_method_code === "SELF_PICKUP"
+            ? null
+            : metadata?.addressText || null,
+        latitude:
+          delivery_method_code === "SELF_PICKUP"
+            ? null
+            : metadata?.latitude || null,
+        longitude:
+          delivery_method_code === "SELF_PICKUP"
+            ? null
+            : metadata?.longitude || null,
+        notes: metadata?.notes || null,
+        storeId:
+          delivery_method_code === "SELF_PICKUP"
+            ? metadata?.storeId || null
+            : null,
+        pickupInstructions:
+          delivery_method_code === "SELF_PICKUP"
+            ? metadata?.pickupInstructions || null
+            : null,
+        distance: metadata?.distance || 0,
+        metadata: metadata || {},
       },
-      paymentMethods: payment_methods || [],
+      paymentMethods: payment_methods,
       metadata: metadata || {},
     });
+
+    // Check if any PhonePe splits need payment initiation
+    const phonePeSplits = order.payment_splits.filter(
+      (s) => s.payment_method === "PHONEPE" && s.status === "PENDING",
+    );
+
+    let paymentInitiation = null;
+    if (phonePeSplits.length > 0) {
+      // Initiate PhonePe payment for the first pending PhonePe split
+      const paymentService = require("../services/payment.service");
+      const phonepeResult = await paymentService.processPhonePeSplit(
+        phonePeSplits[0].split_id,
+        order.order.id,
+        userId,
+        { user_phone: req.user.phone },
+      );
+      paymentInitiation = phonepeResult;
+    }
 
     res.status(201).json({
       success: true,
       message: "Order created successfully",
-      data: order,
+      data: {
+        order: order.order,
+        delivery: order.delivery,
+        pickup_details: order.pickup_details,
+        payment_splits: order.payment_splits,
+        grand_total: order.grand_total,
+        payment_initiation: paymentInitiation,
+      },
     });
   } catch (err) {
     console.error("Checkout error:", err);
@@ -52,11 +138,11 @@ const checkout = async (req, res) => {
       err.message.includes("Cart not found") ||
       err.message.includes("Cart is empty") ||
       err.message.includes("Invalid delivery method") ||
-      err.message.includes("No active store found for pickup")
+      err.message.includes("No active store found for pickup") ||
+      err.message.includes("Insufficient pay later credit")
     ) {
       return res.status(400).json({ success: false, message: err.message });
     }
-    // Send the actual error message for debugging
     res.status(500).json({ success: false, message: err.message });
   }
 };

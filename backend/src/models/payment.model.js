@@ -246,6 +246,49 @@ const areAllSplitsCompleted = async (orderId) => {
   return rows[0] && rows[0].total === rows[0].completed;
 };
 
+/**
+ * Update payment split with PhonePe payment ID and mark as COMPLETED
+ */
+const completePhonePeSplit = async (splitId, paymentId) => {
+  const { rows } = await pool.query(
+    `
+    UPDATE payment_splits
+    SET 
+      payment_id = $1,
+      status = 'COMPLETED',
+      completed_at = CURRENT_TIMESTAMP,
+      updated_at = CURRENT_TIMESTAMP
+    WHERE id = $2
+      AND payment_method = 'PHONEPE'
+    RETURNING *;
+    `,
+    [paymentId, splitId],
+  );
+  return rows[0] || null;
+};
+
+/**
+ * Get order payment summary
+ */
+const getOrderPaymentSummary = async (orderId) => {
+  const { rows } = await pool.query(
+    `
+    SELECT 
+      COALESCE(SUM(CASE WHEN payment_method = 'PAY_LATER' AND status = 'COMPLETED' THEN amount ELSE 0 END), 0) as pay_later_paid,
+      COALESCE(SUM(CASE WHEN payment_method = 'PHONEPE' AND status = 'COMPLETED' THEN amount ELSE 0 END), 0) as phonepe_paid,
+      COALESCE(SUM(CASE WHEN payment_method = 'CASH' AND status = 'COMPLETED' THEN amount ELSE 0 END), 0) as cash_paid,
+      COALESCE(SUM(CASE WHEN status = 'COMPLETED' THEN amount ELSE 0 END), 0) as total_paid,
+      COALESCE(SUM(CASE WHEN status = 'PENDING' THEN amount ELSE 0 END), 0) as total_pending,
+      COUNT(CASE WHEN status = 'COMPLETED' THEN 1 END) as completed_count,
+      COUNT(CASE WHEN status = 'PENDING' THEN 1 END) as pending_count
+    FROM payment_splits
+    WHERE order_id = $1;
+    `,
+    [orderId],
+  );
+  return rows[0] || null;
+};
+
 module.exports = {
   createPayment,
   updatePaymentStatus,
@@ -259,4 +302,6 @@ module.exports = {
   linkPayLaterToSplit,
   linkPaymentToSplit,
   areAllSplitsCompleted,
+  completePhonePeSplit,
+  getOrderPaymentSummary,
 };

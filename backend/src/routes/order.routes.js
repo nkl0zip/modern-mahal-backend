@@ -15,8 +15,9 @@ router.post(
   "/checkout",
   [
     body("shippingAddressId")
+      .optional({ nullable: true })
       .isUUID()
-      .withMessage("Valid shipping address ID is required"),
+      .withMessage("Invalid shipping address id"),
     body("billingAddressId")
       .isUUID()
       .withMessage("Valid billing address ID is required"),

@@ -209,6 +209,335 @@ class PaymentService {
   }
 
   /**
+   * Calculate and process payment splits for an order
+   * This creates the splits and processes PAY_LATER payments immediately
+   */
+  async calculateAndProcessPaymentSplits({
+    orderId,
+    userId,
+    selectedPaymentMethods,
+    client = null,
+    grandTotal,
+  }) {
+    // Use the provided client or fallback to a new connection
+    const useExistingClient = client !== null;
+    const db = client || (await pool.connect());
+
+    try {
+      // Only begin transaction if we're using our own connection
+      if (!useExistingClient) {
+        await db.query("BEGIN");
+      }
+
+      let remainingAmount = grandTotal;
+      const splits = [];
+      let payLaterUsed = 0;
+      let totalPayLaterDebited = 0;
+
+      // Process each payment method
+      for (const method of selectedPaymentMethods) {
+        let amount = 0;
+
+        if (method.type === "PAY_LATER") {
+          // Check user's available pay later credit
+          const userDetails = await getUserPayLaterDetails(userId);
+          const availableCredit = parseFloat(userDetails.available_credit || 0);
+
+          // User wants to use pay later
+          if (method.amount) {
+            amount = Math.min(
+              parseFloat(method.amount),
+              availableCredit,
+              remainingAmount,
+            );
+          } else {
+            // Use available credit up to remaining amount
+            amount = Math.min(availableCredit, remainingAmount);
+          }
+
+          if (amount > 0) {
+            // Process PayLater payment immediately
+            const payLaterResult = await this.processPayLaterPayment({
+              userId,
+              orderId,
+              amount,
+              slabId: userDetails.slab_id,
+              client: db,
+            });
+
+            splits.push({
+              payment_method: "PAY_LATER",
+              amount: amount,
+              slab_id: userDetails.slab_id,
+              split_id: payLaterResult.split_id,
+              pay_later_transaction_id: payLaterResult.transaction_id,
+              status: "COMPLETED",
+              completed_at: new Date(),
+              metadata: {
+                available_credit_before: availableCredit,
+                remaining_credit_after: availableCredit - amount,
+              },
+            });
+
+            payLaterUsed += amount;
+            totalPayLaterDebited += amount;
+            remainingAmount -= amount;
+          }
+        } else if (method.type === "PHONEPE") {
+          // PhonePe payment for remaining amount
+          if (remainingAmount > 0) {
+            const split = await this.createPaymentSplitWithClient({
+              orderId: orderId,
+              paymentMethod: "PHONEPE",
+              amount: remainingAmount,
+              currency: "INR",
+              slabId: null,
+              metadata: {
+                is_remaining: true,
+                remaining_before: remainingAmount,
+              },
+              client: db,
+            });
+
+            splits.push({
+              payment_method: "PHONEPE",
+              amount: remainingAmount,
+              split_id: split.id,
+              status: "PENDING",
+              metadata: {
+                is_remaining: true,
+              },
+            });
+
+            remainingAmount = 0;
+          }
+        } else if (method.type === "CASH") {
+          // Cash payment (admin recorded)
+          if (method.amount && method.amount <= remainingAmount) {
+            const cashAmount = parseFloat(method.amount);
+
+            const split = await this.createPaymentSplitWithClient({
+              orderId: orderId,
+              paymentMethod: "CASH",
+              amount: cashAmount,
+              currency: "INR",
+              slabId: null,
+              metadata: {
+                is_admin_recorded: true,
+              },
+              client: db,
+            });
+
+            splits.push({
+              payment_method: "CASH",
+              amount: cashAmount,
+              split_id: split.id,
+              status: "PENDING",
+              metadata: {
+                is_admin_recorded: true,
+              },
+            });
+
+            remainingAmount -= cashAmount;
+          }
+        }
+      }
+
+      // Validate total matches grand total
+      const totalSplitAmount = splits.reduce((sum, s) => sum + s.amount, 0);
+      if (Math.abs(totalSplitAmount - grandTotal) > 0.01) {
+        throw new Error(
+          `Payment split total (${totalSplitAmount}) does not match order total (${grandTotal})`,
+        );
+      }
+
+      // Update order with selected payment method
+      let selectedMethodType = "MIXED";
+      if (splits.length === 1) {
+        selectedMethodType = splits[0].payment_method;
+      }
+
+      await db.query(
+        `
+      UPDATE orders
+      SET 
+        selected_payment_method = $1,
+        pay_later_used = $2,
+        updated_at = CURRENT_TIMESTAMP
+      WHERE id = $3
+      `,
+        [selectedMethodType, payLaterUsed, orderId],
+      );
+
+      // Only commit if we started the transaction
+      if (!useExistingClient) {
+        await db.query("COMMIT");
+      }
+
+      return {
+        splits: splits,
+        total: grandTotal,
+        selected_method: selectedMethodType,
+        pay_later_used: payLaterUsed,
+      };
+    } catch (error) {
+      // Only rollback if we started the transaction
+      if (!useExistingClient) {
+        await db.query("ROLLBACK");
+      }
+      console.error("Error processing payment splits:", error);
+      throw error;
+    } finally {
+      // Only release if we created our own connection
+      if (!useExistingClient && db.release) {
+        db.release();
+      }
+    }
+  }
+
+  /**
+   * Process PayLater payment for an order
+   * This deducts from user's balance and creates the transaction
+   */
+  async processPayLaterPayment({
+    userId,
+    orderId,
+    amount,
+    slabId = null,
+    client = null,
+  }) {
+    const db = client || (await pool.connect());
+    const useExistingClient = client !== null;
+
+    try {
+      if (!useExistingClient) {
+        await db.query("BEGIN");
+      }
+
+      // Check user's pay later balance with lock
+      const userResult = await db.query(
+        `SELECT pay_later_balance, total_pay_later_used, total_pay_later_repaid 
+       FROM users WHERE id = $1 FOR UPDATE`,
+        [userId],
+      );
+
+      if (userResult.rows.length === 0) {
+        throw new Error("User not found");
+      }
+
+      const currentBalance = parseFloat(userResult.rows[0].pay_later_balance);
+      const totalUsed = parseFloat(
+        userResult.rows[0].total_pay_later_used || 0,
+      );
+
+      if (currentBalance < amount) {
+        throw new Error(
+          `Insufficient pay later credit. Available: ${currentBalance}, Required: ${amount}`,
+        );
+      }
+
+      const newBalance = currentBalance - amount;
+      const newTotalUsed = totalUsed + amount;
+
+      // Create pay later transaction (DEBIT)
+      const transactionResult = await db.query(
+        `
+      INSERT INTO pay_later_transactions (
+        user_id, order_id, transaction_type, amount, balance_after,
+        payment_method, description, metadata
+      )
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+      RETURNING *;
+      `,
+        [
+          userId,
+          orderId,
+          "DEBIT",
+          amount,
+          newBalance,
+          "PAY_LATER",
+          `Purchase using pay later - Order #${orderId}`,
+          JSON.stringify({
+            order_id: orderId,
+            type: "PAY_LATER_PURCHASE",
+            amount: amount,
+            balance_before: currentBalance,
+            balance_after: newBalance,
+          }),
+        ],
+      );
+
+      const transaction = transactionResult.rows[0];
+
+      // Update user's pay later balance
+      await db.query(
+        `
+      UPDATE users
+      SET 
+        pay_later_balance = $1,
+        total_pay_later_used = $2,
+        updated_at = CURRENT_TIMESTAMP
+      WHERE id = $3
+      `,
+        [newBalance, newTotalUsed, userId],
+      );
+
+      // Create payment split record for PAY_LATER
+      const splitResult = await this.createPaymentSplitWithClient({
+        orderId: orderId,
+        paymentMethod: "PAY_LATER",
+        amount: amount,
+        currency: "INR",
+        slabId: slabId,
+        metadata: {
+          transaction_id: transaction.id,
+          balance_before: currentBalance,
+          balance_after: newBalance,
+        },
+        client: db,
+      });
+
+      const split = splitResult;
+
+      // Update split with transaction ID and mark as COMPLETED
+      await db.query(
+        `
+      UPDATE payment_splits
+      SET 
+        pay_later_transaction_id = $1,
+        status = 'COMPLETED',
+        completed_at = CURRENT_TIMESTAMP,
+        updated_at = CURRENT_TIMESTAMP
+      WHERE id = $2
+      `,
+        [transaction.id, split.id],
+      );
+
+      if (!useExistingClient) {
+        await db.query("COMMIT");
+      }
+
+      return {
+        split_id: split.id,
+        transaction_id: transaction.id,
+        amount: amount,
+        new_balance: newBalance,
+        total_used: newTotalUsed,
+      };
+    } catch (error) {
+      if (!useExistingClient) {
+        await db.query("ROLLBACK");
+      }
+      console.error("Error processing PayLater payment:", error);
+      throw error;
+    } finally {
+      if (!useExistingClient && db.release) {
+        db.release();
+      }
+    }
+  }
+
+  /**
    * Helper method to create payment split with a client
    */
   async createPaymentSplitWithClient({
