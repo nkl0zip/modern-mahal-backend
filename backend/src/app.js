@@ -35,6 +35,7 @@ const slabRoutes = require("./routes/admin/slab.routes");
 const paylaterRoutes = require("./routes/paylater.routes");
 const storeRoutes = require("./routes/admin/store.routes");
 const deliveryRoutes = require("./routes/delivery.routes");
+const payLaterRepaymentRoutes = require("./routes/payLaterRepayment.routes");
 
 const errorHandler = require("./middlewares/error.middleware");
 
@@ -81,6 +82,7 @@ app.use("/api/slabs", slabRoutes);
 app.use("/api/paylater", paylaterRoutes);
 app.use("/api/store", storeRoutes);
 app.use("/api/delivery", deliveryRoutes);
+app.use("/api/paylater/repayment", payLaterRepaymentRoutes);
 
 app.use(errorHandler);
 

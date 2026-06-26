@@ -31,6 +31,7 @@ const initiatePayment = async ({
   merchantTransactionId,
   userPhone = null,
   redirectMode = "REDIRECT",
+  callbackUrl = null,
 }) => {
   const payload = {
     merchantId: MERCHANT_ID,
@@ -39,7 +40,7 @@ const initiatePayment = async ({
     amount: amount * 100, // PhonePe expects amount in paisa
     redirectUrl: `${process.env.FRONTEND_URL}/payment-status?orderId=${orderId}`, // frontend return URL after payment
     redirectMode,
-    callbackUrl: CALLBACK_URL,
+    callbackUrl: callbackUrl || CALLBACK_URL,
     mobileNumber: userPhone,
     paymentInstrument: {
       type: "PAY_PAGE",
