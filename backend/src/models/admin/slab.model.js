@@ -8,7 +8,7 @@ const getAllSlabs = async (includeInactive = false) => {
     SELECT 
       s.*,
       COUNT(u.id) as user_count,
-      COALESCE(SUM(u.pay_later_used), 0) as total_pay_later_used
+      COALESCE(SUM(u.total_pay_later_used), 0) as total_pay_later_used
     FROM user_slabs s
     LEFT JOIN users u ON u.slab_id = s.id
   `;
