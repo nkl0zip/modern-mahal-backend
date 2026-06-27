@@ -289,6 +289,17 @@ const getOrderPaymentSummary = async (orderId) => {
   return rows[0] || null;
 };
 
+/**
+ * Get payment by gateway transaction ID
+ */
+const getPaymentByGatewayTransactionId = async (gatewayTransactionId) => {
+  const { rows } = await pool.query(
+    `SELECT * FROM payments WHERE gateway_transaction_id = $1`,
+    [gatewayTransactionId],
+  );
+  return rows[0] || null;
+};
+
 module.exports = {
   createPayment,
   updatePaymentStatus,
@@ -304,4 +315,5 @@ module.exports = {
   areAllSplitsCompleted,
   completePhonePeSplit,
   getOrderPaymentSummary,
+  getPaymentByGatewayTransactionId,
 };
