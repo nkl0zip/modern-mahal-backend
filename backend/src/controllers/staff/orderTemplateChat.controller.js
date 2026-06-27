@@ -144,6 +144,10 @@ const sendChatMessageHandler = async (req, res, next) => {
 
     const fullMessage = rows[0];
 
+    if (!fullMessage) {
+      return res.status(500).json({ message: "Failed to retrieve saved message" });
+    }
+
     // Emit socket event for real-time update
     socketManager.sendToTemplate(template_id, "new-message", {
       message: fullMessage,
@@ -260,7 +264,6 @@ const markAsReadHandler = async (req, res, next) => {
     const updatedCount = await markMessagesAsRead(template_id, user_id);
 
     // Emit socket event
-    const { getSocketManager } = require("../../config/socket");
     const socketManager = getSocketManager();
 
     socketManager.sendToTemplate(template_id, "messages-read", {
