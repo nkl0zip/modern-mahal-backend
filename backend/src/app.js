@@ -3,9 +3,6 @@ const cors = require("cors");
 const bodyParser = require("body-parser");
 require("dotenv").config();
 require("./jobs/cleanupTokens.job");
-const http = require("http");
-const { initializeSocket } = require("./config/socket");
-const fs = require("fs");
 
 const { startCleanupScheduler } = require("./jobs/cleanupOrders.job");
 
@@ -51,6 +48,27 @@ app.use(cors());
 app.use(express.json());
 app.use(bodyParser.json());
 app.use(bodyParser.urlencoded({ extended: true }));
+
+// TODO: TEMP - remove before production
+app.use((req, res, next) => {
+  const start = Date.now();
+  const { method, originalUrl, body, query, headers } = req;
+
+  console.log(`\n[REQ] ${method} ${originalUrl}`);
+  if (Object.keys(query).length) console.log("[REQ] Query:", query);
+  if (Object.keys(body || {}).length) console.log("[REQ] Body:", JSON.stringify(body, null, 2));
+  if (headers.authorization) console.log("[REQ] Auth:", headers.authorization.slice(0, 30) + "...");
+
+  const originalJson = res.json.bind(res);
+  res.json = (data) => {
+    const duration = Date.now() - start;
+    console.log(`[RES] ${method} ${originalUrl} -> ${res.statusCode} (${duration}ms)`);
+    console.log("[RES] Body:", JSON.stringify(data, null, 2));
+    return originalJson(data);
+  };
+
+  next();
+});
 
 startCleanupScheduler();
 

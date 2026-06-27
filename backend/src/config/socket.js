@@ -1,13 +1,15 @@
 const { Server } = require("socket.io");
 const jwt = require("jsonwebtoken");
+const { jwtSecret } = require("./jwt");
 const pool = require("../config/db");
 
 class SocketManager {
   constructor(io) {
     this.io = io;
     this.userSockets = new Map(); // userId -> socketId
-    this.templateRooms = new Map(); // templateId -> [userId1, userId2]
+    this.templateRooms = new Map(); // templateId -> Set<userId>
     this.socketUsers = new Map(); // socketId -> {userId, userRole}
+    this.typingUsers = new Map(); // socketId -> Set<templateId> (tracks which rooms user is typing in)
 
     this.setupMiddleware();
     this.setupConnectionHandlers();
@@ -24,7 +26,7 @@ class SocketManager {
           return next(new Error("Authentication error: Token required"));
         }
 
-        const decoded = jwt.verify(token, process.env.JWT_SECRET);
+        const decoded = jwt.verify(token, jwtSecret);
         socket.userId = decoded.id;
         socket.userRole = decoded.role;
 
@@ -40,20 +42,18 @@ class SocketManager {
     this.io.on("connection", (socket) => {
       console.log(`Socket connected: ${socket.id} - User: ${socket.userId}`);
 
-      // Store socket information
       this.userSockets.set(socket.userId, socket.id);
       this.socketUsers.set(socket.id, {
         userId: socket.userId,
         userRole: socket.userRole,
       });
+      this.typingUsers.set(socket.id, new Set());
 
-      // Handle template room joining
+      // ── join-template ────────────────────────────────────────────
       socket.on("join-template", async (templateId, callback) => {
         try {
-          // Dynamically import to avoid circular dependencies
-          const {
-            checkTemplateAccess,
-          } = require("../models/staff/orderTemplate.model");
+          const { checkTemplateAccess } = require("../models/staff/orderTemplate.model");
+          const { getTemplateChats } = require("../models/staff/orderTemplateChat.model");
 
           const hasAccess = await checkTemplateAccess(
             templateId,
@@ -68,7 +68,6 @@ class SocketManager {
 
           socket.join(`template:${templateId}`);
 
-          // Store room membership
           if (!this.templateRooms.has(templateId)) {
             this.templateRooms.set(templateId, new Set());
           }
@@ -76,9 +75,13 @@ class SocketManager {
 
           console.log(`User ${socket.userId} joined template:${templateId}`);
 
-          if (callback) callback({ success: true, templateId });
+          // Deliver recent chat history to the joining user
+          const history = await getTemplateChats(templateId, 50, 0);
+          // DB returns newest-first — reverse so client gets oldest-first
+          const orderedHistory = history.slice().reverse();
 
-          // Notify others in the room
+          if (callback) callback({ success: true, templateId, history: orderedHistory });
+
           socket.to(`template:${templateId}`).emit("user-joined", {
             userId: socket.userId,
             timestamp: new Date().toISOString(),
@@ -89,21 +92,10 @@ class SocketManager {
         }
       });
 
-      // Handle leave template
+      // ── leave-template ───────────────────────────────────────────
       socket.on("leave-template", (templateId, callback) => {
         try {
-          socket.leave(`template:${templateId}`);
-
-          // Remove from room membership
-          if (this.templateRooms.has(templateId)) {
-            this.templateRooms.get(templateId).delete(socket.userId);
-            if (this.templateRooms.get(templateId).size === 0) {
-              this.templateRooms.delete(templateId);
-            }
-          }
-
-          console.log(`User ${socket.userId} left template:${templateId}`);
-
+          this._leaveTemplateRoom(socket, templateId);
           if (callback) callback({ success: true, templateId });
         } catch (error) {
           console.error("Error leaving template:", error);
@@ -111,7 +103,7 @@ class SocketManager {
         }
       });
 
-      // Handle chat message
+      // ── send-message ─────────────────────────────────────────────
       socket.on("send-message", async (data, callback) => {
         try {
           const {
@@ -121,7 +113,6 @@ class SocketManager {
             attachments = [],
           } = data;
 
-          // Validate input
           if (!template_id) {
             if (callback) callback({ error: "Template ID is required" });
             return;
@@ -132,12 +123,8 @@ class SocketManager {
             return;
           }
 
-          // Dynamically import to avoid circular dependencies
-          const {
-            checkTemplateAccess,
-          } = require("../models/staff/orderTemplate.model");
+          const { checkTemplateAccess } = require("../models/staff/orderTemplate.model");
 
-          // Check access
           const template = await checkTemplateAccess(
             template_id,
             socket.userId,
@@ -145,27 +132,19 @@ class SocketManager {
           );
 
           if (!template) {
-            if (callback)
-              callback({ error: "Template not found or access denied" });
+            if (callback) callback({ error: "Template not found or access denied" });
             return;
           }
 
-          // Check if template is active
           if (["COMPLETED", "CANCELLED"].includes(template.status)) {
-            if (callback)
-              callback({
-                error: `Cannot send messages to ${template.status.toLowerCase()} template`,
-              });
+            if (callback) callback({
+              error: `Cannot send messages to ${template.status.toLowerCase()} template`,
+            });
             return;
           }
 
-          // Import model
-          const {
-            addChatMessage,
-            addChatAttachment,
-          } = require("../models/staff/orderTemplateChat.model");
+          const { addChatMessage, addChatAttachment } = require("../models/staff/orderTemplateChat.model");
 
-          // Save message to database
           const chatMessage = await addChatMessage({
             template_id,
             sender_id: socket.userId,
@@ -173,7 +152,6 @@ class SocketManager {
             message_type,
           });
 
-          // Save attachments if any
           const savedAttachments = [];
           if (attachments && attachments.length > 0) {
             for (const attachment of attachments) {
@@ -190,14 +168,12 @@ class SocketManager {
             }
           }
 
-          // Get full message with sender details
           const { rows } = await pool.query(
             `
-            SELECT 
+            SELECT
               otc.*,
               u.name as sender_name,
               u.role as sender_role,
-              u.avatar_url as sender_avatar,
               ARRAY(
                 SELECT jsonb_build_object(
                   'id', ota.id,
@@ -218,54 +194,54 @@ class SocketManager {
 
           const fullMessage = rows[0];
 
-          // Broadcast message to template room
+          if (!fullMessage) {
+            if (callback) callback({ error: "Failed to retrieve saved message" });
+            return;
+          }
+
+          // Broadcast to everyone in the room including sender
           this.io.to(`template:${template_id}`).emit("new-message", {
             message: fullMessage,
             template_id,
           });
 
-          // Mark as read for sender immediately
-          socket.emit("message-read", {
-            template_id,
-            count: 0, // sender sees it as read
-            message_id: chatMessage.id,
-          });
-
-          // For other users in room, it's unread
+          // Unread notification only to others
           socket.to(`template:${template_id}`).emit("new-unread", {
             template_id,
             count: 1,
             sender_id: socket.userId,
           });
 
-          if (callback)
-            callback({
-              success: true,
-              message: fullMessage,
-            });
+          if (callback) callback({ success: true, message: fullMessage });
         } catch (error) {
           console.error("Error sending message:", error);
-          if (callback)
-            callback({
-              error: "Failed to send message",
-              details: error.message,
-            });
+          if (callback) callback({ error: "Failed to send message", details: error.message });
         }
       });
 
-      // Handle typing indicator
+      // ── typing ───────────────────────────────────────────────────
       socket.on("typing", (data) => {
         const { template_id, isTyping } = data;
-        if (template_id) {
-          socket.to(`template:${template_id}`).emit("user-typing", {
-            userId: socket.userId,
-            isTyping,
-            timestamp: new Date().toISOString(),
-          });
+        if (!template_id) return;
+
+        // Track typing state so we can clean up on disconnect
+        const typingSet = this.typingUsers.get(socket.id);
+        if (typingSet) {
+          if (isTyping) {
+            typingSet.add(template_id);
+          } else {
+            typingSet.delete(template_id);
+          }
         }
+
+        socket.to(`template:${template_id}`).emit("user-typing", {
+          userId: socket.userId,
+          isTyping,
+          timestamp: new Date().toISOString(),
+        });
       });
 
-      // Handle mark as read
+      // ── mark-as-read ─────────────────────────────────────────────
       socket.on("mark-as-read", async (data, callback) => {
         try {
           const { template_id, message_ids } = data;
@@ -275,12 +251,8 @@ class SocketManager {
             return;
           }
 
-          // Dynamically import to avoid circular dependencies
-          const {
-            checkTemplateAccess,
-          } = require("../models/staff/orderTemplate.model");
+          const { checkTemplateAccess } = require("../models/staff/orderTemplate.model");
 
-          // Check access
           const template = await checkTemplateAccess(
             template_id,
             socket.userId,
@@ -288,18 +260,14 @@ class SocketManager {
           );
 
           if (!template) {
-            if (callback)
-              callback({ error: "Template not found or access denied" });
+            if (callback) callback({ error: "Template not found or access denied" });
             return;
           }
 
-          const {
-            markMessagesAsRead,
-          } = require("../models/staff/orderTemplateChat.model");
+          const { markMessagesAsRead } = require("../models/staff/orderTemplateChat.model");
 
           let updatedCount;
           if (message_ids && message_ids.length > 0) {
-            // Mark specific messages as read
             const { rowCount } = await pool.query(
               `
               UPDATE order_template_chats
@@ -314,11 +282,9 @@ class SocketManager {
             );
             updatedCount = rowCount;
           } else {
-            // Mark all messages as read
             updatedCount = await markMessagesAsRead(template_id, socket.userId);
           }
 
-          // Emit read receipt
           this.io.to(`template:${template_id}`).emit("messages-read", {
             template_id,
             reader_id: socket.userId,
@@ -326,18 +292,14 @@ class SocketManager {
             message_ids: message_ids || "all",
           });
 
-          if (callback)
-            callback({
-              success: true,
-              updated_count: updatedCount,
-            });
+          if (callback) callback({ success: true, updated_count: updatedCount });
         } catch (error) {
           console.error("Error marking messages as read:", error);
           if (callback) callback({ error: "Failed to mark messages as read" });
         }
       });
 
-      // Handle message deletion
+      // ── delete-message ───────────────────────────────────────────
       socket.on("delete-message", async (data, callback) => {
         try {
           const { message_id } = data;
@@ -347,57 +309,53 @@ class SocketManager {
             return;
           }
 
-          const {
-            deleteChatMessage,
-          } = require("../models/staff/orderTemplateChat.model");
+          const { deleteChatMessage } = require("../models/staff/orderTemplateChat.model");
 
-          const deletedMessage = await deleteChatMessage(
-            message_id,
-            socket.userId,
-          );
+          const deletedMessage = await deleteChatMessage(message_id, socket.userId);
 
           if (!deletedMessage) {
-            if (callback)
-              callback({ error: "Message not found or permission denied" });
+            if (callback) callback({ error: "Message not found or permission denied" });
             return;
           }
 
-          // Broadcast deletion to template room
-          socket
-            .to(`template:${deletedMessage.template_id}`)
-            .emit("message-deleted", {
-              message_id,
-              template_id: deletedMessage.template_id,
-              deleted_by: socket.userId,
-              timestamp: new Date().toISOString(),
-            });
+          // Broadcast to everyone in the room including sender
+          this.io.to(`template:${deletedMessage.template_id}`).emit("message-deleted", {
+            message_id,
+            template_id: deletedMessage.template_id,
+            deleted_by: socket.userId,
+            timestamp: new Date().toISOString(),
+          });
 
-          if (callback)
-            callback({
-              success: true,
-              message: deletedMessage,
-            });
+          if (callback) callback({ success: true, message: deletedMessage });
         } catch (error) {
           console.error("Error deleting message:", error);
           if (callback) callback({ error: "Failed to delete message" });
         }
       });
 
-      // Handle disconnect
+      // ── disconnect ───────────────────────────────────────────────
       socket.on("disconnect", () => {
-        console.log(
-          `Socket disconnected: ${socket.id} - User: ${socket.userId}`,
-        );
+        console.log(`Socket disconnected: ${socket.id} - User: ${socket.userId}`);
 
-        // Remove from userSockets
+        // Clear typing indicators for all rooms this user was typing in
+        const typingSet = this.typingUsers.get(socket.id);
+        if (typingSet && typingSet.size > 0) {
+          for (const templateId of typingSet) {
+            socket.to(`template:${templateId}`).emit("user-typing", {
+              userId: socket.userId,
+              isTyping: false,
+              timestamp: new Date().toISOString(),
+            });
+          }
+        }
+        this.typingUsers.delete(socket.id);
+
         if (this.userSockets.get(socket.userId) === socket.id) {
           this.userSockets.delete(socket.userId);
         }
 
-        // Remove from socketUsers
         this.socketUsers.delete(socket.id);
 
-        // Remove from template rooms
         for (const [templateId, users] of this.templateRooms.entries()) {
           if (users.has(socket.userId)) {
             users.delete(socket.userId);
@@ -410,7 +368,31 @@ class SocketManager {
     });
   }
 
-  // Utility method to send notification to specific user
+  // ── Private helper ─────────────────────────────────────────────
+  _leaveTemplateRoom(socket, templateId) {
+    socket.leave(`template:${templateId}`);
+
+    const typingSet = this.typingUsers.get(socket.id);
+    if (typingSet && typingSet.has(templateId)) {
+      typingSet.delete(templateId);
+      socket.to(`template:${templateId}`).emit("user-typing", {
+        userId: socket.userId,
+        isTyping: false,
+        timestamp: new Date().toISOString(),
+      });
+    }
+
+    if (this.templateRooms.has(templateId)) {
+      this.templateRooms.get(templateId).delete(socket.userId);
+      if (this.templateRooms.get(templateId).size === 0) {
+        this.templateRooms.delete(templateId);
+      }
+    }
+
+    console.log(`User ${socket.userId} left template:${templateId}`);
+  }
+
+  // ── Public utilities ───────────────────────────────────────────
   sendToUser(userId, event, data) {
     const socketId = this.userSockets.get(userId);
     if (socketId) {
@@ -418,76 +400,60 @@ class SocketManager {
     }
   }
 
-  // Utility method to send to template room
   sendToTemplate(templateId, event, data) {
     this.io.to(`template:${templateId}`).emit(event, data);
   }
 
-  // Get online users in a template
   getOnlineUsers(templateId) {
     const users = this.templateRooms.get(templateId);
     return users ? Array.from(users) : [];
   }
 
-  // Check if user is online
   isUserOnline(userId) {
     return this.userSockets.has(userId);
   }
 
-  // Get all connected sockets
   getConnectedSockets() {
     return Array.from(this.io.sockets.sockets.keys());
   }
 
-  // Get socket by user ID
   getSocketByUserId(userId) {
     const socketId = this.userSockets.get(userId);
     return socketId ? this.io.sockets.sockets.get(socketId) : null;
   }
 }
 
-// Singleton instance
+// ── Singleton ──────────────────────────────────────────────────
 let socketManager = null;
 
-// Factory function to initialize socket
 const initializeSocket = (server) => {
-  if (socketManager) {
-    return socketManager; // Already initialized
-  }
+  if (socketManager) return socketManager;
 
-  // Create Socket.io server
   const io = new Server(server, {
-  cors: {
-    origin: (origin, callback) => callback(null, true),
-    credentials: true,
-  },
-  // IMPORTANT: WebSocket first, polling as fallback
-  transports: ["websocket", "polling"],
-  allowUpgrades: false,  // Don't allow transport upgrades (forces WebSocket to work immediately)
-  pingTimeout: 60000,
-  pingInterval: 25000,
-});
+    cors: {
+      origin: (origin, callback) => callback(null, true),
+      credentials: true,
+    },
+    transports: ["websocket", "polling"],
+    allowUpgrades: false,
+    pingTimeout: 60000,
+    pingInterval: 25000,
+  });
 
-  // Create SocketManager instance
   socketManager = new SocketManager(io);
-
   return socketManager;
 };
 
 const getSocketManager = () => {
   if (!socketManager) {
-    throw new Error(
-      "Socket manager not initialized. Call initializeSocket first.",
-    );
+    throw new Error("Socket manager not initialized. Call initializeSocket first.");
   }
   return socketManager;
 };
 
 const getIO = () => {
   if (!socketManager) {
-    throw new Error(
-      "Socket manager not initialized. Call initializeSocket first.",
-    );
+    throw new Error("Socket manager not initialized. Call initializeSocket first.");
   }
   return socketManager.io;
 };
@@ -496,5 +462,5 @@ module.exports = {
   initializeSocket,
   getSocketManager,
   getIO,
-  SocketManager, // Export class for testing if needed
+  SocketManager,
 };

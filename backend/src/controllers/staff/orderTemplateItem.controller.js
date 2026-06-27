@@ -12,6 +12,16 @@ const {
   checkTemplateAccess,
 } = require("../../models/staff/orderTemplate.model");
 
+const { getSocketManager } = require("../../config/socket");
+
+const emitItemsUpdated = (template_id, user_id) => {
+  try {
+    const sm = getSocketManager();
+    sm.sendToTemplate(template_id, "template-items-updated", { template_id });
+    if (user_id) sm.sendToUser(user_id, "template-items-updated", { template_id });
+  } catch (_) {}
+};
+
 /**
  * GET /api/order-templates/:template_id/items
  * Get template items
@@ -146,6 +156,8 @@ const addItemToTemplateHandler = async (req, res, next) => {
       message_type: "TEXT",
     });
 
+    emitItemsUpdated(template_id, template.user_id);
+
     return res.status(201).json({
       message: "Item added to template successfully",
       item,
@@ -217,6 +229,8 @@ const updateItemQuantityHandler = async (req, res, next) => {
         message_type: "TEXT",
       });
     }
+
+    emitItemsUpdated(item.template_id, template.user_id);
 
     return res.status(200).json({
       message: "Item quantity updated successfully",
@@ -304,6 +318,8 @@ const updateItemStatusHandler = async (req, res, next) => {
       });
     }
 
+    emitItemsUpdated(item.template_id, template.user_id);
+
     return res.status(200).json({
       message: "Item status updated successfully",
       item: updatedItem,
@@ -364,6 +380,8 @@ const removeItemFromTemplateHandler = async (req, res, next) => {
       message: `Removed ${item.product_name} from the template`,
       message_type: "TEXT",
     });
+
+    emitItemsUpdated(item.template_id, template.user_id);
 
     return res.status(200).json({
       message: "Item removed from template successfully",
