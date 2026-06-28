@@ -216,6 +216,44 @@ const adminGetOrders = async (req, res) => {
   }
 };
 
+// GET /api/admin/orders/search?q=john&page=1&limit=10
+const searchOrders = async (req, res) => {
+  const { q, limit = 10, page = 1 } = req.query;
+
+  if (!q || q.trim().length < 2) {
+    return res.status(400).json({
+      success: false,
+      message: "Search term must be at least 2 characters",
+    });
+  }
+
+  const offset = (parseInt(page) - 1) * parseInt(limit);
+
+  try {
+    const [orders, total] = await Promise.all([
+      orderModel.searchOrders(q.trim(), parseInt(limit), offset),
+      orderModel.countSearchOrders(q.trim()),
+    ]);
+
+    res.json({
+      success: true,
+      data: orders,
+      pagination: {
+        page: parseInt(page),
+        limit: parseInt(limit),
+        total: total,
+        totalPages: Math.ceil(total / parseInt(limit)),
+      },
+    });
+  } catch (err) {
+    console.error("Search orders error:", err);
+    res.status(500).json({
+      success: false,
+      message: "Failed to search orders",
+    });
+  }
+};
+
 // PUT /api/admin/orders/:orderId/status
 const updateOrderStatus = async (req, res) => {
   const { orderId } = req.params;
@@ -581,6 +619,7 @@ module.exports = {
   getMyOrders,
   getOrderDetails,
   adminGetOrders,
+  searchOrders,
   updateOrderStatus,
   getOrderHistory,
   addOrderNote,

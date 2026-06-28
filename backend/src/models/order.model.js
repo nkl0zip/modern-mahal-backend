@@ -309,6 +309,65 @@ const adminGetOrders = async (filters = {}, limit = 20, offset = 0) => {
 };
 
 /**
+ * Search orders by user name, email, or order number
+ * Returns same structure as getOrdersByUser
+ */
+const searchOrders = async (searchTerm, limit = 10, offset = 0) => {
+  const query = `
+    SELECT
+      o.*,
+      json_agg(DISTINCT jsonb_build_object(
+        'id', oi.id,
+        'product_id', oi.product_id,
+        'variant_id', oi.variant_id,
+        'quantity', oi.quantity,
+        'unit_price', oi.unit_price,
+        'total_price', oi.total_price
+      )) as items,
+      (
+        SELECT jsonb_build_object(
+          'status', p.status,
+          'gateway_transaction_id', p.gateway_transaction_id,
+          'payment_gateway', p.payment_gateway
+        )
+        FROM payments p
+        WHERE p.order_id = o.id
+        ORDER BY p.created_at DESC
+        LIMIT 1
+      ) as latest_payment
+    FROM orders o
+    JOIN users u ON o.user_id = u.id
+    LEFT JOIN order_items oi ON o.id = oi.order_id
+    WHERE 
+      LOWER(u.name) LIKE LOWER($1) OR
+      LOWER(u.email) LIKE LOWER($1) OR
+      LOWER(o.order_number) LIKE LOWER($1)
+    GROUP BY o.id
+    ORDER BY o.created_at DESC
+    LIMIT $2 OFFSET $3;
+  `;
+  const { rows } = await pool.query(query, [`%${searchTerm}%`, limit, offset]);
+  return rows;
+};
+
+/**
+ * Count total search results for pagination
+ */
+const countSearchOrders = async (searchTerm) => {
+  const query = `
+    SELECT COUNT(DISTINCT o.id) as total
+    FROM orders o
+    JOIN users u ON o.user_id = u.id
+    WHERE 
+      LOWER(u.name) LIKE LOWER($1) OR
+      LOWER(u.email) LIKE LOWER($1) OR
+      LOWER(o.order_number) LIKE LOWER($1)
+  `;
+  const { rows } = await pool.query(query, [`%${searchTerm}%`]);
+  return parseInt(rows[0].total);
+};
+
+/**
  * Update order status and log history
  */
 const updateOrderStatus = async (
@@ -969,6 +1028,8 @@ module.exports = {
   getOrdersByUser,
   updateOrderStatus,
   adminGetOrders,
+  searchOrders,
+  countSearchOrders,
   getOrderStatusHistory,
   addOrderNote,
   getOrderNotes,
