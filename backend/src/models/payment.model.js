@@ -235,7 +235,7 @@ const linkPaymentToSplit = async (splitId, paymentId) => {
 const areAllSplitsCompleted = async (orderId) => {
   const { rows } = await pool.query(
     `
-    SELECT 
+    SELECT
       COUNT(*) as total,
       COUNT(CASE WHEN status = 'COMPLETED' THEN 1 END) as completed
     FROM payment_splits
@@ -243,7 +243,10 @@ const areAllSplitsCompleted = async (orderId) => {
     `,
     [orderId],
   );
-  return rows[0] && rows[0].total === rows[0].completed;
+  if (!rows[0]) return false;
+  const total = parseInt(rows[0].total, 10);
+  const completed = parseInt(rows[0].completed, 10);
+  return total > 0 && total === completed;
 };
 
 /**

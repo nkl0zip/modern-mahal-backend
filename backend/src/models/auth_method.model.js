@@ -22,7 +22,19 @@ const findAuthMethodByUserAndProvider = async (userId, provider) => {
   return result.rows[0];
 };
 
+// Fetch auth method by provider_id (e.g. Google sub) — used for Google Sign-In lookup
+const findAuthMethodByProviderId = async (providerId, provider) => {
+  const query = `
+    SELECT * FROM auth_methods
+    WHERE provider_id = $1 AND provider = $2
+    LIMIT 1;
+  `;
+  const result = await pool.query(query, [providerId, provider]);
+  return result.rows[0];
+};
+
 module.exports = {
   createAuthMethod,
   findAuthMethodByUserAndProvider,
+  findAuthMethodByProviderId,
 };

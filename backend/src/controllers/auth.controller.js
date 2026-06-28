@@ -2,13 +2,15 @@ const {
   createUser,
   findUserByEmail,
   findUserByPhone,
+  findUserById,
   updateUserPhoneAndVerify,
 } = require("../models/user.model");
 const {
   findAuthMethodByUserAndProvider,
+  findAuthMethodByProviderId,
   createAuthMethod,
 } = require("../models/auth_method.model");
-const { createUserProfile } = require("../models/user_profile.model");
+const { createUserProfile, upsertUserProfile } = require("../models/user_profile.model");
 const {
   generateOTP,
   saveOTP,
@@ -193,18 +195,29 @@ const googleAuth = async (req, res) => {
     const googleUser = await verifyGoogleToken(id_token);
     const { googleId, email, name, picture } = googleUser;
 
-    // ✅ Check if user already exists with this Google ID
-    let authMethod = await findAuthMethodByProviderId(googleId, "GOOGLE");
-
+    let isNewUser = false;
     let user;
+
+    // Check if user already signed in with Google before
+    const authMethod = await findAuthMethodByProviderId(googleId, "GOOGLE");
+
     if (authMethod) {
-      // 🟢 Existing user → fetch user
+      // Returning Google user
       user = await findUserById(authMethod.user_id);
     } else {
-      // 🆕 New user → create user, auth_method, and user_profile
-      user = await createUser(name, email, null, null, true);
-      await createAuthMethod(user.id, "GOOGLE", googleId);
-      await createUserProfile(user.id, null, picture, null, null);
+      // Check if an account with this email already exists (e.g. email/password user)
+      const existingUser = await findUserByEmail(email);
+      if (existingUser) {
+        // Link Google to the existing account
+        user = existingUser;
+        await createAuthMethod(user.id, "GOOGLE", googleId);
+      } else {
+        // Brand new user
+        isNewUser = true;
+        user = await createUser(name, email, null, null, true);
+        await createAuthMethod(user.id, "GOOGLE", googleId);
+        await upsertUserProfile(user.id, null, picture || null, null, null);
+      }
     }
 
     // ✅ Generate JWT
@@ -213,6 +226,7 @@ const googleAuth = async (req, res) => {
     res.status(200).json({
       message: "Authentication successful",
       token,
+      is_new_user: isNewUser,
       user: {
         id: user.id,
         name: user.name,

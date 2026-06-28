@@ -205,12 +205,25 @@ class SocketManager {
             template_id,
           });
 
-          // Unread notification only to others
+          // Unread notification only to others (include names for toast display)
           socket.to(`template:${template_id}`).emit("new-unread", {
             template_id,
-            count: 1,
+            template_title: template.title,
             sender_id: socket.userId,
+            sender_name: fullMessage.sender_name,
+            count: 1,
           });
+
+          // Directly notify the template owner — their global notification socket is not in the room
+          if (template.user_id && String(template.user_id) !== String(socket.userId)) {
+            this.sendToUser(template.user_id, "new-unread", {
+              template_id,
+              template_title: template.title,
+              sender_id: socket.userId,
+              sender_name: fullMessage.sender_name,
+              count: 1,
+            });
+          }
 
           if (callback) callback({ success: true, message: fullMessage });
         } catch (error) {

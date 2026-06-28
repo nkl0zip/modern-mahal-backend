@@ -4,6 +4,7 @@ const phonepeService = require("../services/phonepe.service");
 const pool = require("../config/db");
 const paymentService = require("../services/payment.service");
 const { validationResult } = require("express-validator");
+const { uploadToCloudinary } = require("../middlewares/upload.middleware");
 
 // POST /api/payments/initiate
 const initiatePayment = async (req, res) => {
@@ -63,13 +64,25 @@ const initiatePayment = async (req, res) => {
       });
     }
 
-    // 5. Use the PhonePe split amount, not the full order total
+    // 5. Idempotency: if there's already an INITIATED payment for this split, return it
+    const existingInitiated = await paymentModel.getLatestPaymentByOrder(orderId);
+    if (existingInitiated && existingInitiated.status === "INITIATED") {
+      const initiatedSec = (Date.now() - new Date(existingInitiated.created_at).getTime()) / 1000;
+      if (initiatedSec < 300) {
+        return res.status(400).json({
+          success: false,
+          message: "A payment is already in progress for this order. Please wait or retry after 5 minutes.",
+        });
+      }
+    }
+
+    // 6. Use the PhonePe split amount, not the full order total
     const amountToPay = parseFloat(phonepeSplit.amount);
 
-    // 6. Generate merchant transaction ID (unique per attempt)
+    // 7. Generate merchant transaction ID (unique per attempt)
     const merchantTransactionId = `TXN${Date.now()}${Math.random().toString(36).substring(2, 8)}`;
 
-    // 7. Create payment record (INITIATED) with the split amount
+    // 8. Create payment record (INITIATED) with the split amount
     const payment = await paymentModel.createPayment({
       orderId: order.id,
       paymentGateway: "PHONEPE",
@@ -89,10 +102,10 @@ const initiatePayment = async (req, res) => {
       },
     });
 
-    // 8. Link payment to split
+    // 9. Link payment to split
     await paymentModel.linkPaymentToSplit(phonepeSplit.id, payment.id);
 
-    // 9. Call PhonePe API with the split amount
+    // 10. Call PhonePe API with the split amount
     const phonepeResponse = await phonepeService.initiatePayment({
       orderId: order.id,
       amount: amountToPay, // Use split amount
@@ -100,7 +113,7 @@ const initiatePayment = async (req, res) => {
       userPhone: req.user.phone,
     });
 
-    // 10. Return redirect URL to frontend
+    // 11. Return redirect URL to frontend
     res.json({
       success: true,
       message: "Payment initiated",
@@ -125,13 +138,18 @@ const paymentWebhook = async (req, res) => {
   const { response } = req.body;
   const xVerify = req.headers["x-verify"];
 
+  console.log("[WEBHOOK] Received. x-verify present:", !!xVerify, "| response present:", !!response);
+
   if (!response || !xVerify) {
+    console.warn("[WEBHOOK] Missing parameters — response:", !!response, "x-verify:", !!xVerify);
     return res.status(400).send("Missing parameters");
   }
 
   // 1. Verify signature
   const isValid = phonepeService.verifyCallback(response, xVerify);
+  console.log("[WEBHOOK] Signature valid:", isValid);
   if (!isValid) {
+    console.error("[WEBHOOK] Signature mismatch. x-verify header:", xVerify);
     return res.status(401).send("Invalid signature");
   }
 
@@ -145,10 +163,13 @@ const paymentWebhook = async (req, res) => {
     responseCode,
   } = decoded.data;
 
+  console.log("[WEBHOOK] Decoded — txnId:", merchantTransactionId, "| state:", state, "| responseCode:", responseCode, "| amount:", amount);
+
   // 3. Map PhonePe state to our status
   let paymentStatus = "FAILED";
   if (state === "COMPLETED") paymentStatus = "SUCCESS";
   else if (state === "PENDING") paymentStatus = "PENDING";
+  console.log("[WEBHOOK] Mapped paymentStatus:", paymentStatus);
 
   const client = await pool.connect();
   try {
@@ -168,9 +189,23 @@ const paymentWebhook = async (req, res) => {
     const payment = paymentQuery.rows[0];
 
     // 5. Idempotency: if already processed, just return OK
+    console.log("[WEBHOOK] DB payment status:", payment.status, "for payment id:", payment.id);
     if (payment.status === "SUCCESS" || payment.status === "FAILED") {
+      console.log("[WEBHOOK] Skipping — already processed as:", payment.status);
       await client.query("COMMIT");
       return res.status(200).send("Already processed");
+    }
+
+    // 5b. Amount validation — PhonePe sends amount in paise; verify it matches our record
+    if (paymentStatus === "SUCCESS") {
+      const expectedPaise = Math.round(parseFloat(payment.amount) * 100);
+      if (amount !== expectedPaise) {
+        console.error(
+          `Webhook amount mismatch for txn ${merchantTransactionId}: expected ${expectedPaise} paise, got ${amount} paise`,
+        );
+        await client.query("ROLLBACK");
+        return res.status(400).send("Amount mismatch");
+      }
     }
 
     // 6. Update payment record
@@ -221,30 +256,39 @@ const paymentWebhook = async (req, res) => {
         );
       }
 
-      // Update order status if all splits are completed
-      const allCompleted = await paymentModel.areAllSplitsCompleted(
-        payment.order_id,
+      // Check completion using the transaction client so uncommitted split updates are visible
+      const completionResult = await client.query(
+        `SELECT
+           COUNT(*) AS total,
+           COUNT(CASE WHEN status = 'COMPLETED' THEN 1 END) AS completed
+         FROM payment_splits
+         WHERE order_id = $1`,
+        [payment.order_id],
       );
+      const totalSplits = parseInt(completionResult.rows[0]?.total ?? 0, 10);
+      const completedSplits = parseInt(completionResult.rows[0]?.completed ?? 0, 10);
+      const allCompleted = totalSplits > 0 && totalSplits === completedSplits;
 
       if (allCompleted) {
         await client.query(
           `UPDATE orders
-           SET 
+           SET
              payment_split_completed = true,
              status = 'PAID',
              updated_at = CURRENT_TIMESTAMP
            WHERE id = $1
-           AND status = 'PENDING'`,
+             AND status = 'PENDING'`,
           [payment.order_id],
         );
       }
     }
 
+    console.log("[WEBHOOK] Done. Final status:", paymentStatus, "for txn:", merchantTransactionId);
     await client.query("COMMIT");
     res.status(200).send("OK");
   } catch (err) {
     await client.query("ROLLBACK");
-    console.error("Webhook processing error:", err);
+    console.error("[WEBHOOK] Processing error:", err);
     res.status(500).send("Internal server error");
   } finally {
     client.release();
@@ -344,7 +388,11 @@ const retryPayment = async (req, res) => {
   }
 };
 
-// GET /api/payments/status/:orderId (optional polling endpoint)
+// GET /api/payments/status/:orderId
+// Intentionally reads only from DB — the webhook is the authoritative status source.
+// PhonePe's sandbox status API always returns COMPLETED regardless of payment outcome,
+// so querying it here produces wrong results in UAT and is unreliable in production
+// during the brief window between redirect and webhook delivery.
 const getPaymentStatus = async (req, res) => {
   const { orderId } = req.params;
   const userId = req.user.id;
@@ -352,21 +400,24 @@ const getPaymentStatus = async (req, res) => {
   try {
     const order = await orderModel.getOrderById(orderId);
     if (!order)
-      return res
-        .status(404)
-        .json({ success: false, message: "Order not found" });
+      return res.status(404).json({ success: false, message: "Order not found" });
     if (order.user_id !== userId && req.user.role !== "ADMIN") {
       return res.status(403).json({ success: false, message: "Access denied" });
     }
 
-    const latestPayment = await paymentModel.getLatestPaymentByOrder(orderId);
-    if (!latestPayment) {
-      return res
-        .status(404)
-        .json({ success: false, message: "No payment found" });
+    // Fast path: order already finalised by webhook
+    if (order.status === "PAID") {
+      return res.json({
+        success: true,
+        data: { orderStatus: "PAID", paymentStatus: "SUCCESS" },
+      });
     }
 
-    res.json({
+    const latestPayment = await paymentModel.getLatestPaymentByOrder(orderId);
+    if (!latestPayment)
+      return res.status(404).json({ success: false, message: "No payment found" });
+
+    return res.json({
       success: true,
       data: {
         orderStatus: order.status,
@@ -376,9 +427,7 @@ const getPaymentStatus = async (req, res) => {
     });
   } catch (err) {
     console.error("Get payment status error:", err);
-    res
-      .status(500)
-      .json({ success: false, message: "Failed to fetch payment status" });
+    res.status(500).json({ success: false, message: "Failed to fetch payment status" });
   }
 };
 
@@ -488,41 +537,51 @@ const processPayLaterSplit = async (req, res, next) => {
  * Process Cash payment for a split (Admin only)
  */
 const processCashSplit = async (req, res, next) => {
-  const client = await pool.connect();
-
   const { split_id, order_id, user_id, transaction_id } = req.body;
   const adminId = req.user.id;
 
+  // Upload receipt to Cloudinary if provided
+  let receiptData = { receipt_url: null, receipt_public_id: null, transaction_id: transaction_id || null };
+  if (req.file) {
+    try {
+      const uploadResult = await uploadToCloudinary(req.file, "payment-receipts");
+      receiptData.receipt_url = uploadResult.secure_url;
+      receiptData.receipt_public_id = uploadResult.public_id;
+    } catch (uploadErr) {
+      console.error("Receipt upload failed:", uploadErr);
+      return res.status(500).json({ success: false, message: "Failed to upload receipt" });
+    }
+  }
+
+  const client = await pool.connect();
   try {
     await client.query("BEGIN");
 
-    // Get split details
+    // Get split details with row lock
     const splitResult = await client.query(
       `SELECT * FROM payment_splits WHERE id = $1 AND order_id = $2 FOR UPDATE`,
       [split_id, order_id],
     );
 
     if (splitResult.rows.length === 0) {
-      throw new Error("Payment split not found");
+      await client.query("ROLLBACK");
+      return res.status(404).json({ success: false, message: "Payment split not found" });
     }
 
     const split = splitResult.rows[0];
 
-    // Allow CASH to be used for any pending split
-    // Instead of requiring CASH payment method, we can process any split as cash
-    // This is useful for admin recording cash payments against any split
     if (split.status === "COMPLETED") {
-      throw new Error("This split is already completed");
+      await client.query("ROLLBACK");
+      return res.status(400).json({ success: false, message: "This split is already completed" });
     }
 
-    // If the split is not CASH, we still allow it but log a warning
     if (split.payment_method !== "CASH") {
       console.log(
         `Warning: Processing non-CASH split (${split.payment_method}) as CASH payment`,
       );
     }
 
-    // Create payment record for cash
+    // Create payment record
     const payment = await client.query(
       `
       INSERT INTO payments (
@@ -537,14 +596,14 @@ const processCashSplit = async (req, res, next) => {
       RETURNING *;
       `,
       [
-        orderId,
+        order_id,
         split.amount,
         JSON.stringify({
           receipt_url: receiptData.receipt_url,
           receipt_public_id: receiptData.receipt_public_id,
           recorded_by: adminId,
           payment_method: "CASH",
-          transaction_id: receiptData.transaction_id || null,
+          transaction_id: receiptData.transaction_id,
           original_split_method: split.payment_method,
         }),
       ],
@@ -554,7 +613,7 @@ const processCashSplit = async (req, res, next) => {
     await client.query(
       `
       UPDATE payment_splits
-      SET 
+      SET
         cash_payment_id = $1,
         status = 'COMPLETED',
         completed_at = CURRENT_TIMESTAMP,
@@ -570,7 +629,7 @@ const processCashSplit = async (req, res, next) => {
           recorded_at: new Date().toISOString(),
           payment_method: "CASH",
         }),
-        splitId,
+        split_id,
       ],
     );
 
@@ -578,26 +637,52 @@ const processCashSplit = async (req, res, next) => {
     await client.query(
       `
       UPDATE orders
-      SET 
+      SET
         cash_paid = cash_paid + $1,
         updated_at = CURRENT_TIMESTAMP
       WHERE id = $2
       `,
-      [split.amount, orderId],
+      [split.amount, order_id],
     );
+
+    // Check if all splits are completed and finalise order (use client to see uncommitted changes)
+    const completionResult = await client.query(
+      `SELECT
+         COUNT(*) AS total,
+         COUNT(CASE WHEN status = 'COMPLETED' THEN 1 END) AS completed
+       FROM payment_splits
+       WHERE order_id = $1`,
+      [order_id],
+    );
+    const totalSplits = parseInt(completionResult.rows[0]?.total ?? 0, 10);
+    const completedSplits = parseInt(completionResult.rows[0]?.completed ?? 0, 10);
+
+    if (totalSplits > 0 && totalSplits === completedSplits) {
+      await client.query(
+        `UPDATE orders
+         SET
+           payment_split_completed = true,
+           status = 'PAID',
+           updated_at = CURRENT_TIMESTAMP
+         WHERE id = $1
+           AND status = 'PENDING'`,
+        [order_id],
+      );
+    }
 
     await client.query("COMMIT");
 
-    return {
+    return res.status(200).json({
       success: true,
-      split_id: splitId,
+      split_id: split_id,
       payment_id: payment.rows[0].id,
       amount: split.amount,
       original_payment_method: split.payment_method,
-    };
+      receipt_url: receiptData.receipt_url,
+    });
   } catch (error) {
     await client.query("ROLLBACK");
-    throw error;
+    next(error);
   } finally {
     client.release();
   }

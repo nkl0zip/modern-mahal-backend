@@ -79,10 +79,17 @@ const getUserWithSlab = async (userId) => {
   return rows[0] || null;
 };
 
+const findUserById = async (userId) => {
+  const query = `SELECT * FROM users WHERE id = $1 LIMIT 1;`;
+  const result = await pool.query(query, [userId]);
+  return result.rows[0];
+};
+
 module.exports = {
   createUser,
   findUserByEmail,
   findUserByPhone,
+  findUserById,
   updateUserPhoneAndVerify,
   updateUser,
   getUserWithSlab,

@@ -168,15 +168,25 @@ const getOrderById = async (orderId) => {
   const query = `
     SELECT
       o.*,
-      json_agg(DISTINCT jsonb_build_object(
-        'id', oi.id,
-        'product_id', oi.product_id,
-        'variant_id', oi.variant_id,
-        'quantity', oi.quantity,
-        'unit_price', oi.unit_price,
-        'discount_amount', oi.discount_amount,
-        'total_price', oi.total_price
-      )) as items,
+      COALESCE(
+        json_agg(DISTINCT jsonb_build_object(
+          'id', oi.id,
+          'product_id', oi.product_id,
+          'variant_id', oi.variant_id,
+          'product_name', pr.name,
+          'sub_code', pv.sub_code,
+          'thumbnail', (
+            SELECT pi.media_url FROM products_image pi
+            WHERE pi.product_id = oi.product_id
+            ORDER BY pi.display_order ASC LIMIT 1
+          ),
+          'quantity', oi.quantity,
+          'unit_price', oi.unit_price,
+          'discount_amount', oi.discount_amount,
+          'total_price', oi.total_price
+        )) FILTER (WHERE oi.id IS NOT NULL),
+        '[]'
+      ) as items,
       COALESCE(
         json_agg(DISTINCT jsonb_build_object(
           'id', p.id,
@@ -200,6 +210,8 @@ const getOrderById = async (orderId) => {
       ) as payment_splits
     FROM orders o
     LEFT JOIN order_items oi ON o.id = oi.order_id
+    LEFT JOIN products pr ON oi.product_id = pr.id
+    LEFT JOIN product_variants pv ON oi.variant_id = pv.id
     LEFT JOIN payments p ON o.id = p.order_id
     LEFT JOIN payment_splits ps ON o.id = ps.order_id
     WHERE o.id = $1
@@ -216,14 +228,24 @@ const getOrdersByUser = async (userId, limit = 10, offset = 0) => {
   const query = `
     SELECT
       o.*,
-      json_agg(DISTINCT jsonb_build_object(
-        'id', oi.id,
-        'product_id', oi.product_id,
-        'variant_id', oi.variant_id,
-        'quantity', oi.quantity,
-        'unit_price', oi.unit_price,
-        'total_price', oi.total_price
-      )) as items,
+      COALESCE(
+        json_agg(DISTINCT jsonb_build_object(
+          'id', oi.id,
+          'product_id', oi.product_id,
+          'variant_id', oi.variant_id,
+          'product_name', pr.name,
+          'sub_code', pv.sub_code,
+          'thumbnail', (
+            SELECT pi.media_url FROM products_image pi
+            WHERE pi.product_id = oi.product_id
+            ORDER BY pi.display_order ASC LIMIT 1
+          ),
+          'quantity', oi.quantity,
+          'unit_price', oi.unit_price,
+          'total_price', oi.total_price
+        )) FILTER (WHERE oi.id IS NOT NULL),
+        '[]'
+      ) as items,
       (
         SELECT jsonb_build_object(
           'status', p.status,
@@ -237,6 +259,8 @@ const getOrdersByUser = async (userId, limit = 10, offset = 0) => {
       ) as latest_payment
     FROM orders o
     LEFT JOIN order_items oi ON o.id = oi.order_id
+    LEFT JOIN products pr ON oi.product_id = pr.id
+    LEFT JOIN product_variants pv ON oi.variant_id = pv.id
     WHERE o.user_id = $1
     GROUP BY o.id
     ORDER BY o.created_at DESC
