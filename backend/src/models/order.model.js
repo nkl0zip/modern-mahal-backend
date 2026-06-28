@@ -162,6 +162,56 @@ const createOrderFromCart = async (
 };
 
 /**
+ * Count total admin orders with filters
+ */
+const countAdminOrders = async (filters = {}) => {
+  const conditions = [];
+  const values = [];
+  let paramCounter = 1;
+
+  if (filters.status) {
+    conditions.push(`status = $${paramCounter}`);
+    values.push(filters.status);
+    paramCounter++;
+  }
+  if (filters.start_date) {
+    conditions.push(`created_at >= $${paramCounter}`);
+    values.push(filters.start_date);
+    paramCounter++;
+  }
+  if (filters.end_date) {
+    conditions.push(`created_at <= $${paramCounter}`);
+    values.push(filters.end_date);
+    paramCounter++;
+  }
+
+  const whereClause = conditions.length
+    ? `WHERE ${conditions.join(" AND ")}`
+    : "";
+
+  const query = `
+    SELECT COUNT(*) as total
+    FROM orders o
+    ${whereClause}
+  `;
+  const { rows } = await pool.query(query, values);
+  return parseInt(rows[0].total);
+};
+
+/**
+ * Count total orders for a user
+ */
+const countOrdersByUser = async (userId) => {
+  const query = `
+    SELECT COUNT(*) as total
+    FROM orders
+    WHERE user_id = $1
+  `;
+  const { rows } = await pool.query(query, [userId]);
+  return parseInt(rows[0].total);
+};
+
+/**
  * Get order by ID (with items, payments, and user details)
  */
 const getOrderById = async (orderId) => {
@@ -1108,6 +1158,8 @@ module.exports = {
   getOrderById,
   getOrdersByUser,
   updateOrderStatus,
+  countAdminOrders,
+  countOrdersByUser,
   adminGetOrders,
   getAdminOrderSummary,
   searchOrders,
