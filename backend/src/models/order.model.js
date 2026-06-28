@@ -162,12 +162,15 @@ const createOrderFromCart = async (
 };
 
 /**
- * Get order by ID (with items and payments)
+ * Get order by ID (with items, payments, and user details)
  */
 const getOrderById = async (orderId) => {
   const query = `
     SELECT
       o.*,
+      u.name as user_name,
+      u.email as user_email,
+      u.phone as user_phone,
       json_agg(DISTINCT jsonb_build_object(
         'id', oi.id,
         'product_id', oi.product_id,
@@ -199,11 +202,12 @@ const getOrderById = async (orderId) => {
         '[]'
       ) as payment_splits
     FROM orders o
+    JOIN users u ON o.user_id = u.id
     LEFT JOIN order_items oi ON o.id = oi.order_id
     LEFT JOIN payments p ON o.id = p.order_id
     LEFT JOIN payment_splits ps ON o.id = ps.order_id
     WHERE o.id = $1
-    GROUP BY o.id;
+    GROUP BY o.id, u.id;
   `;
   const { rows } = await pool.query(query, [orderId]);
   return rows[0] || null;
