@@ -204,11 +204,20 @@ const adminGetOrders = async (req, res) => {
   const offset = (page - 1) * limit;
 
   try {
-    const orders = await orderModel.adminGetOrders(filters, limit, offset);
+    // Fetch orders and summary in parallel
+    const [orders, summary] = await Promise.all([
+      orderModel.adminGetOrders(filters, limit, offset),
+      orderModel.getAdminOrderSummary(filters),
+    ]);
+
     res.json({
       success: true,
       data: orders,
-      pagination: { page, limit },
+      pagination: {
+        page: page,
+        limit: limit,
+      },
+      summary: summary,
     });
   } catch (err) {
     console.error("Admin get orders error:", err);
@@ -218,7 +227,7 @@ const adminGetOrders = async (req, res) => {
 
 // GET /api/admin/orders/search?q=john&page=1&limit=10
 const searchOrders = async (req, res) => {
-  const { q, limit = 10, page = 1 } = req.query;
+  const { q, limit = 20, page = 1 } = req.query;
 
   if (!q || q.trim().length < 2) {
     return res.status(400).json({
@@ -230,9 +239,11 @@ const searchOrders = async (req, res) => {
   const offset = (parseInt(page) - 1) * parseInt(limit);
 
   try {
-    const [orders, total] = await Promise.all([
+    // Fetch orders, count, and summary in parallel
+    const [orders, total, summary] = await Promise.all([
       orderModel.searchOrders(q.trim(), parseInt(limit), offset),
       orderModel.countSearchOrders(q.trim()),
+      orderModel.getSearchOrderSummary(q.trim()),
     ]);
 
     res.json({
@@ -244,6 +255,7 @@ const searchOrders = async (req, res) => {
         total: total,
         totalPages: Math.ceil(total / parseInt(limit)),
       },
+      summary: summary,
     });
   } catch (err) {
     console.error("Search orders error:", err);
