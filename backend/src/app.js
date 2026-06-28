@@ -32,6 +32,7 @@ const slabRoutes = require("./routes/admin/slab.routes");
 const paylaterRoutes = require("./routes/paylater.routes");
 const storeRoutes = require("./routes/admin/store.routes");
 const deliveryRoutes = require("./routes/delivery.routes");
+const payLaterRepaymentRoutes = require("./routes/payLaterRepayment.routes");
 
 const errorHandler = require("./middlewares/error.middleware");
 
@@ -56,13 +57,17 @@ app.use((req, res, next) => {
 
   console.log(`\n[REQ] ${method} ${originalUrl}`);
   if (Object.keys(query).length) console.log("[REQ] Query:", query);
-  if (Object.keys(body || {}).length) console.log("[REQ] Body:", JSON.stringify(body, null, 2));
-  if (headers.authorization) console.log("[REQ] Auth:", headers.authorization.slice(0, 30) + "...");
+  if (Object.keys(body || {}).length)
+    console.log("[REQ] Body:", JSON.stringify(body, null, 2));
+  if (headers.authorization)
+    console.log("[REQ] Auth:", headers.authorization.slice(0, 30) + "...");
 
   const originalJson = res.json.bind(res);
   res.json = (data) => {
     const duration = Date.now() - start;
-    console.log(`[RES] ${method} ${originalUrl} -> ${res.statusCode} (${duration}ms)`);
+    console.log(
+      `[RES] ${method} ${originalUrl} -> ${res.statusCode} (${duration}ms)`,
+    );
     console.log("[RES] Body:", JSON.stringify(data, null, 2));
     return originalJson(data);
   };
@@ -99,6 +104,7 @@ app.use("/api/slabs", slabRoutes);
 app.use("/api/paylater", paylaterRoutes);
 app.use("/api/store", storeRoutes);
 app.use("/api/delivery", deliveryRoutes);
+app.use("/api/paylater/repayment", payLaterRepaymentRoutes);
 
 app.use(errorHandler);
 

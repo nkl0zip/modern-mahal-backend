@@ -162,12 +162,65 @@ const createOrderFromCart = async (
 };
 
 /**
- * Get order by ID (with items and payments)
+ * Count total admin orders with filters
+ */
+const countAdminOrders = async (filters = {}) => {
+  const conditions = [];
+  const values = [];
+  let paramCounter = 1;
+
+  if (filters.status) {
+    conditions.push(`status = $${paramCounter}`);
+    values.push(filters.status);
+    paramCounter++;
+  }
+  if (filters.start_date) {
+    conditions.push(`created_at >= $${paramCounter}`);
+    values.push(filters.start_date);
+    paramCounter++;
+  }
+  if (filters.end_date) {
+    conditions.push(`created_at <= $${paramCounter}`);
+    values.push(filters.end_date);
+    paramCounter++;
+  }
+
+  const whereClause = conditions.length
+    ? `WHERE ${conditions.join(" AND ")}`
+    : "";
+
+  const query = `
+    SELECT COUNT(*) as total
+    FROM orders o
+    ${whereClause}
+  `;
+  const { rows } = await pool.query(query, values);
+  return parseInt(rows[0].total);
+};
+
+/**
+ * Count total orders for a user
+ */
+const countOrdersByUser = async (userId) => {
+  const query = `
+    SELECT COUNT(*) as total
+    FROM orders
+    WHERE user_id = $1
+  `;
+  const { rows } = await pool.query(query, [userId]);
+  return parseInt(rows[0].total);
+};
+
+/**
+ * Get order by ID (with items, payments, and user details)
  */
 const getOrderById = async (orderId) => {
   const query = `
     SELECT
       o.*,
+      u.name as user_name,
+      u.email as user_email,
+      u.phone as user_phone,
       COALESCE(
         json_agg(DISTINCT jsonb_build_object(
           'id', oi.id,
@@ -209,13 +262,14 @@ const getOrderById = async (orderId) => {
         '[]'
       ) as payment_splits
     FROM orders o
+    JOIN users u ON o.user_id = u.id
     LEFT JOIN order_items oi ON o.id = oi.order_id
     LEFT JOIN products pr ON oi.product_id = pr.id
     LEFT JOIN product_variants pv ON oi.variant_id = pv.id
     LEFT JOIN payments p ON o.id = p.order_id
     LEFT JOIN payment_splits ps ON o.id = ps.order_id
     WHERE o.id = $1
-    GROUP BY o.id;
+    GROUP BY o.id, u.id;
   `;
   const { rows } = await pool.query(query, [orderId]);
   return rows[0] || null;
@@ -276,30 +330,36 @@ const getOrdersByUser = async (userId, limit = 10, offset = 0) => {
 const adminGetOrders = async (filters = {}, limit = 20, offset = 0) => {
   const conditions = [];
   const values = [];
+  let paramCounter = 1;
 
   if (filters.status) {
-    conditions.push(`o.status = $${values.length + 1}`);
+    conditions.push(`o.status = $${paramCounter}`);
     values.push(filters.status);
+    paramCounter++;
   }
   if (filters.payment_status) {
     conditions.push(
-      `EXISTS (SELECT 1 FROM payments p WHERE p.order_id = o.id AND p.status = $${values.length + 1})`,
+      `EXISTS (SELECT 1 FROM payments p WHERE p.order_id = o.id AND p.status = $${paramCounter})`,
     );
     values.push(filters.payment_status);
+    paramCounter++;
   }
   if (filters.start_date) {
-    conditions.push(`o.created_at >= $${values.length + 1}`);
+    conditions.push(`o.created_at >= $${paramCounter}`);
     values.push(filters.start_date);
+    paramCounter++;
   }
   if (filters.end_date) {
-    conditions.push(`o.created_at <= $${values.length + 1}`);
+    conditions.push(`o.created_at <= $${paramCounter}`);
     values.push(filters.end_date);
+    paramCounter++;
   }
 
   const whereClause = conditions.length
     ? `WHERE ${conditions.join(" AND ")}`
     : "";
 
+  // Main query with user details
   const query = `
     SELECT
       o.*,
@@ -312,7 +372,8 @@ const adminGetOrders = async (filters = {}, limit = 20, offset = 0) => {
           'status', p.status,
           'amount', p.amount,
           'gateway_transaction_id', p.gateway_transaction_id,
-          'created_at', p.created_at
+          'created_at', p.created_at,
+          'payment_gateway', p.payment_gateway
         ))
         FROM payments p
         WHERE p.order_id = o.id
@@ -321,11 +382,144 @@ const adminGetOrders = async (filters = {}, limit = 20, offset = 0) => {
     JOIN users u ON o.user_id = u.id
     ${whereClause}
     ORDER BY o.created_at DESC
-    LIMIT $${values.length + 1} OFFSET $${values.length + 2};
+    LIMIT $${paramCounter} OFFSET $${paramCounter + 1};
   `;
   values.push(limit, offset);
   const { rows } = await pool.query(query, values);
   return rows;
+};
+
+/**
+ * Admin: Get order summary counts (total, pending, paid, cancelled)
+ */
+const getAdminOrderSummary = async (filters = {}) => {
+  const conditions = [];
+  const values = [];
+  let paramCounter = 1;
+
+  if (filters.start_date) {
+    conditions.push(`created_at >= $${paramCounter}`);
+    values.push(filters.start_date);
+    paramCounter++;
+  }
+  if (filters.end_date) {
+    conditions.push(`created_at <= $${paramCounter}`);
+    values.push(filters.end_date);
+    paramCounter++;
+  }
+
+  const whereClause = conditions.length
+    ? `WHERE ${conditions.join(" AND ")}`
+    : "";
+
+  const query = `
+    SELECT 
+      COUNT(*) as total_orders,
+      COUNT(CASE WHEN status = 'PENDING' THEN 1 END) as pending,
+      COUNT(CASE WHEN status = 'PAID' THEN 1 END) as paid,
+      COUNT(CASE WHEN status = 'CANCELLED' THEN 1 END) as cancelled,
+      COUNT(CASE WHEN status = 'FAILED' THEN 1 END) as failed,
+      COUNT(CASE WHEN status = 'REFUNDED' THEN 1 END) as refunded
+    FROM orders o
+    ${whereClause}
+  `;
+  const { rows } = await pool.query(query, values);
+  return (
+    rows[0] || {
+      total_orders: 0,
+      pending: 0,
+      paid: 0,
+      cancelled: 0,
+      failed: 0,
+      refunded: 0,
+    }
+  );
+};
+
+/**
+ * Search orders by user name, email, or order number
+ * Returns orders with user details
+ */
+const searchOrders = async (searchTerm, limit = 10, offset = 0) => {
+  const query = `
+    SELECT
+      o.*,
+      u.name as user_name,
+      u.email as user_email,
+      u.phone as user_phone,
+      (
+        SELECT jsonb_agg(jsonb_build_object(
+          'id', p.id,
+          'status', p.status,
+          'amount', p.amount,
+          'gateway_transaction_id', p.gateway_transaction_id,
+          'created_at', p.created_at,
+          'payment_gateway', p.payment_gateway
+        ))
+        FROM payments p
+        WHERE p.order_id = o.id
+      ) as payments
+    FROM orders o
+    JOIN users u ON o.user_id = u.id
+    WHERE 
+      LOWER(u.name) LIKE LOWER($1) OR
+      LOWER(u.email) LIKE LOWER($1) OR
+      LOWER(o.order_number) LIKE LOWER($1)
+    GROUP BY o.id, u.id
+    ORDER BY o.created_at DESC
+    LIMIT $2 OFFSET $3;
+  `;
+  const { rows } = await pool.query(query, [`%${searchTerm}%`, limit, offset]);
+  return rows;
+};
+
+/**
+ * Count total search results for pagination
+ */
+const countSearchOrders = async (searchTerm) => {
+  const query = `
+    SELECT COUNT(DISTINCT o.id) as total
+    FROM orders o
+    JOIN users u ON o.user_id = u.id
+    WHERE 
+      LOWER(u.name) LIKE LOWER($1) OR
+      LOWER(u.email) LIKE LOWER($1) OR
+      LOWER(o.order_number) LIKE LOWER($1)
+  `;
+  const { rows } = await pool.query(query, [`%${searchTerm}%`]);
+  return parseInt(rows[0].total);
+};
+
+/**
+ * Get order summary counts for search results
+ */
+const getSearchOrderSummary = async (searchTerm) => {
+  const query = `
+    SELECT 
+      COUNT(DISTINCT o.id) as total_orders,
+      COUNT(DISTINCT CASE WHEN o.status = 'PENDING' THEN o.id END) as pending,
+      COUNT(DISTINCT CASE WHEN o.status = 'PAID' THEN o.id END) as paid,
+      COUNT(DISTINCT CASE WHEN o.status = 'CANCELLED' THEN o.id END) as cancelled,
+      COUNT(DISTINCT CASE WHEN o.status = 'FAILED' THEN o.id END) as failed,
+      COUNT(DISTINCT CASE WHEN o.status = 'REFUNDED' THEN o.id END) as refunded
+    FROM orders o
+    JOIN users u ON o.user_id = u.id
+    WHERE 
+      LOWER(u.name) LIKE LOWER($1) OR
+      LOWER(u.email) LIKE LOWER($1) OR
+      LOWER(o.order_number) LIKE LOWER($1)
+  `;
+  const { rows } = await pool.query(query, [`%${searchTerm}%`]);
+  return (
+    rows[0] || {
+      total_orders: 0,
+      pending: 0,
+      paid: 0,
+      cancelled: 0,
+      failed: 0,
+      refunded: 0,
+    }
+  );
 };
 
 /**
@@ -988,7 +1182,13 @@ module.exports = {
   getOrderById,
   getOrdersByUser,
   updateOrderStatus,
+  countAdminOrders,
+  countOrdersByUser,
   adminGetOrders,
+  getAdminOrderSummary,
+  searchOrders,
+  countSearchOrders,
+  getSearchOrderSummary,
   getOrderStatusHistory,
   addOrderNote,
   getOrderNotes,

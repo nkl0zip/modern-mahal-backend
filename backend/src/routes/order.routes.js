@@ -62,6 +62,14 @@ router.get(
   orderController.adminGetOrders,
 );
 
+// GET /api/admin/orders/search - Search orders by name, email, order_number
+router.get(
+  "/admin/orders/search",
+  authenticateToken,
+  requireRole(["ADMIN", "STAFF", "SUB_ADMIN"]),
+  orderController.searchOrders,
+);
+
 // Admin/Staff only routes
 router.put(
   "/admin/:orderId/status",

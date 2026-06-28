@@ -155,11 +155,24 @@ const getMyOrders = async (req, res) => {
   const offset = (page - 1) * limit;
 
   try {
-    const orders = await orderModel.getOrdersByUser(userId, limit, offset);
+    const [orders, total] = await Promise.all([
+      orderModel.getOrdersByUser(userId, limit, offset),
+      orderModel.countOrdersByUser(userId),
+    ]);
+
+    const totalPages = Math.ceil(total / limit);
+
     res.json({
       success: true,
       data: orders,
-      pagination: { page, limit },
+      pagination: {
+        page: page,
+        per_page: limit,
+        total_count: total,
+        total_pages: totalPages,
+        next_page: page < totalPages ? page + 1 : null,
+        prev_page: page > 1 ? page - 1 : null,
+      },
     });
   } catch (err) {
     console.error("Get my orders error:", err);
@@ -204,15 +217,77 @@ const adminGetOrders = async (req, res) => {
   const offset = (page - 1) * limit;
 
   try {
-    const orders = await orderModel.adminGetOrders(filters, limit, offset);
+    // Fetch orders, count, and summary in parallel
+    const [orders, total, summary] = await Promise.all([
+      orderModel.adminGetOrders(filters, limit, offset),
+      orderModel.countAdminOrders(filters),
+      orderModel.getAdminOrderSummary(filters),
+    ]);
+
+    const totalPages = Math.ceil(total / limit);
+
     res.json({
       success: true,
       data: orders,
-      pagination: { page, limit },
+      pagination: {
+        page: page,
+        per_page: limit,
+        total_count: total,
+        total_pages: totalPages,
+        next_page: page < totalPages ? page + 1 : null,
+        prev_page: page > 1 ? page - 1 : null,
+      },
+      summary: summary,
     });
   } catch (err) {
     console.error("Admin get orders error:", err);
     res.status(500).json({ success: false, message: "Failed to fetch orders" });
+  }
+};
+
+// GET /api/admin/orders/search?q=john&page=1&limit=20
+const searchOrders = async (req, res) => {
+  const { q, limit = 20, page = 1 } = req.query;
+
+  if (!q || q.trim().length < 2) {
+    return res.status(400).json({
+      success: false,
+      message: "Search term must be at least 2 characters",
+    });
+  }
+
+  const offset = (parseInt(page) - 1) * parseInt(limit);
+  const searchTerm = q.trim();
+
+  try {
+    // Fetch orders, count, and summary in parallel
+    const [orders, total, summary] = await Promise.all([
+      orderModel.searchOrders(searchTerm, parseInt(limit), offset),
+      orderModel.countSearchOrders(searchTerm),
+      orderModel.getSearchOrderSummary(searchTerm),
+    ]);
+
+    const totalPages = Math.ceil(total / parseInt(limit));
+
+    res.json({
+      success: true,
+      data: orders,
+      pagination: {
+        page: parseInt(page),
+        per_page: parseInt(limit),
+        total_count: total,
+        total_pages: totalPages,
+        next_page: page < totalPages ? parseInt(page) + 1 : null,
+        prev_page: page > 1 ? parseInt(page) - 1 : null,
+      },
+      summary: summary,
+    });
+  } catch (err) {
+    console.error("Search orders error:", err);
+    res.status(500).json({
+      success: false,
+      message: "Failed to search orders",
+    });
   }
 };
 
@@ -581,6 +656,7 @@ module.exports = {
   getMyOrders,
   getOrderDetails,
   adminGetOrders,
+  searchOrders,
   updateOrderStatus,
   getOrderHistory,
   addOrderNote,
