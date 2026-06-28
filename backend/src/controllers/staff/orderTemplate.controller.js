@@ -146,17 +146,17 @@ const getTemplateDetailsHandler = async (req, res, next) => {
     }
 
     const template = await checkTemplateAccess(template_id, user_id, user_role);
+    if (!template) {
+      return res
+        .status(404)
+        .json({ message: "Template not found or access denied" });
+    }
     // For staff users, check if they are assigned to this template
     if (["STAFF"].includes(user_role) && template.staff_id !== user_id) {
       return res.status(403).json({
         message:
           "Staff is not assigned to this template. Please get assigned first.",
       });
-    }
-    if (!template) {
-      return res
-        .status(404)
-        .json({ message: "Template not found or access denied" });
     }
 
     // Get template user & staff details
@@ -222,17 +222,17 @@ const updateTemplateHandler = async (req, res, next) => {
 
     // Check access
     const template = await checkTemplateAccess(template_id, user_id, user_role);
+    if (!template) {
+      return res
+        .status(404)
+        .json({ message: "Template not found or access denied" });
+    }
     // For staff users, check if they are assigned to this template
     if (["STAFF"].includes(user_role) && template.staff_id !== user_id) {
       return res.status(403).json({
         message:
           "Staff is not assigned to this template. Please get assigned first.",
       });
-    }
-    if (!template) {
-      return res
-        .status(404)
-        .json({ message: "Template not found or access denied" });
     }
 
     // Validate status if provided
@@ -303,17 +303,17 @@ const deleteTemplateHandler = async (req, res, next) => {
 
     // Check access
     const template = await checkTemplateAccess(template_id, user_id, user_role);
+    if (!template) {
+      return res
+        .status(404)
+        .json({ message: "Template not found or access denied" });
+    }
     // For staff users, check if they are assigned to this template
     if (["STAFF"].includes(user_role) && template.staff_id !== user_id) {
       return res.status(403).json({
         message:
           "Staff is not assigned to this template. Please get assigned first.",
       });
-    }
-    if (!template) {
-      return res
-        .status(404)
-        .json({ message: "Template not found or access denied" });
     }
 
     // Only template owner or admin can delete
@@ -356,17 +356,17 @@ const finalizeTemplateHandler = async (req, res, next) => {
     }
 
     const template = await checkTemplateAccess(template_id, user_id, user_role);
+    if (!template) {
+      return res
+        .status(404)
+        .json({ message: "Template not found or access denied" });
+    }
     // For staff users, check if they are assigned to this template
     if (["STAFF"].includes(user_role) && template.staff_id !== user_id) {
       return res.status(403).json({
         message:
           "Staff is not assigned to this template. Please get assigned first.",
       });
-    }
-    if (!template) {
-      return res
-        .status(404)
-        .json({ message: "Template not found or access denied" });
     }
 
     // Check if template has items
@@ -421,7 +421,12 @@ const assignStaffHandler = async (req, res, next) => {
       });
     }*/
 
-    const updatedTemplate = await assignStaffToTemplate(template_id, staff_id);
+    let updatedTemplate = await assignStaffToTemplate(template_id, staff_id);
+
+    // Auto-activate: if template is still DRAFT, move it to ACTIVE now that staff is assigned
+    if (updatedTemplate && updatedTemplate.status === "DRAFT") {
+      updatedTemplate = await updateTemplate(template_id, { status: "ACTIVE" });
+    }
 
     // Send notification chat message
     await addChatMessage({
