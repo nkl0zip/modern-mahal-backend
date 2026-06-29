@@ -464,14 +464,13 @@ const assignStaffHandler = async (req, res, next) => {
 const moveTemplateToCartHandler = async (req, res, next) => {
   try {
     const { template_id } = req.params;
-    const { mode } = req.body; // "COMBINE" or "REPLACE"
-
+    // Remove: const { mode } = req.body;
     const user_id = req.user.id;
 
     const result = await moveTemplateItemsToCart({
       template_id,
       user_id,
-      mode,
+      // Remove: mode,
     });
 
     return res.status(200).json({
