@@ -312,8 +312,8 @@ const paymentWebhook = async (req, res) => {
       // After PhonePe split is completed, check if there is a PENDING PAY_LATER split for this order
       const payLaterSplitResult = await client.query(
         `SELECT * FROM payment_splits
-         WHERE order_id = $1 AND payment_method = 'PAY_LATER' AND status = 'PENDING'
-         FOR UPDATE`,
+   WHERE order_id = $1 AND payment_method = 'PAY_LATER' AND status = 'PENDING'
+   FOR UPDATE`,
         [payment.order_id],
       );
 
@@ -324,78 +324,12 @@ const paymentWebhook = async (req, res) => {
           throw new Error("User ID not available for PayLater deduction");
         }
 
-        // Get user balance with lock
-        const userResult = await client.query(
-          `SELECT pay_later_balance, total_pay_later_used FROM users WHERE id = $1 FOR UPDATE`,
-          [userId],
-        );
-        if (userResult.rows.length === 0) throw new Error("User not found");
-        const currentBalance = parseFloat(userResult.rows[0].pay_later_balance);
-        const totalUsed = parseFloat(
-          userResult.rows[0].total_pay_later_used || 0,
-        );
-        const amountToDeduct = parseFloat(payLaterSplit.amount);
-
-        if (currentBalance < amountToDeduct) {
-          throw new Error(
-            `Insufficient pay later credit. Available: ${currentBalance}, Required: ${amountToDeduct}`,
-          );
-        }
-
-        const newBalance = currentBalance - amountToDeduct;
-        const newTotalUsed = totalUsed + amountToDeduct;
-
-        // Create pay later transaction (DEBIT)
-        const transactionResult = await client.query(
-          `INSERT INTO pay_later_transactions (
-            user_id, order_id, transaction_type, amount, balance_after,
-            payment_method, description, metadata
-          ) VALUES ($1, $2, 'DEBIT', $3, $4, 'PAY_LATER', $5, $6)
-          RETURNING *`,
-          [
-            userId,
-            payment.order_id,
-            amountToDeduct,
-            newBalance,
-            `Purchase using pay later - Order #${payment.order_id}`,
-            JSON.stringify({
-              payment_split_id: payLaterSplit.id,
-              order_id: payment.order_id,
-              type: "PAY_LATER_PURCHASE",
-            }),
-          ],
-        );
-        const transaction = transactionResult.rows[0];
-
-        // Update user's pay later balance
-        await client.query(
-          `UPDATE users
-           SET pay_later_balance = $1,
-               total_pay_later_used = $2,
-               updated_at = CURRENT_TIMESTAMP
-           WHERE id = $3`,
-          [newBalance, newTotalUsed, userId],
-        );
-
-        // Update order pay_later_used
-        await client.query(
-          `UPDATE orders
-           SET pay_later_used = pay_later_used + $1,
-               pay_later_transaction_id = $2,
-               updated_at = CURRENT_TIMESTAMP
-           WHERE id = $3`,
-          [amountToDeduct, transaction.id, payment.order_id],
-        );
-
-        // Mark split as COMPLETED
-        await client.query(
-          `UPDATE payment_splits
-           SET status = 'COMPLETED',
-               pay_later_transaction_id = $1,
-               completed_at = CURRENT_TIMESTAMP,
-               updated_at = CURRENT_TIMESTAMP
-           WHERE id = $2`,
-          [transaction.id, payLaterSplit.id],
+        // Process PayLater split using the same transaction client
+        await paymentService.processPayLaterSplit(
+          payLaterSplit.id,
+          payment.order_id,
+          userId,
+          client, // pass the existing client to reuse the transaction
         );
 
         console.log(

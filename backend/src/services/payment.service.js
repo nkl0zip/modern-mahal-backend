@@ -680,15 +680,22 @@ class PaymentService {
 
   /**
    * Process PayLater payment for a split
+   * @param {string} splitId - The split ID
+   * @param {string} orderId - The order ID
+   * @param {string} userId - The user ID
+   * @param {object} client - Optional database client (for transactional use)
    */
-  async processPayLaterSplit(splitId, orderId, userId) {
-    const client = await pool.connect();
+  async processPayLaterSplit(splitId, orderId, userId, client = null) {
+    const db = client || (await pool.connect());
+    const useExistingClient = client !== null;
 
     try {
-      await client.query("BEGIN");
+      if (!useExistingClient) {
+        await db.query("BEGIN");
+      }
 
       // Get split details with FOR UPDATE lock
-      const splitResult = await client.query(
+      const splitResult = await db.query(
         `SELECT * FROM payment_splits WHERE id = $1 AND order_id = $2 FOR UPDATE`,
         [splitId, orderId],
       );
@@ -704,7 +711,7 @@ class PaymentService {
       }
 
       if (split.status === "COMPLETED") {
-        await client.query("COMMIT");
+        await db.query("COMMIT");
         return { already_completed: true, split };
       }
 
@@ -712,8 +719,8 @@ class PaymentService {
       const roundedAmount = Math.round(parseFloat(split.amount) * 100) / 100;
 
       // Check user's pay later balance - use FOR UPDATE to lock the user row
-      const userResult = await client.query(
-        `SELECT pay_later_balance FROM users WHERE id = $1 FOR UPDATE`,
+      const userResult = await db.query(
+        `SELECT pay_later_balance, total_pay_later_used FROM users WHERE id = $1 FOR UPDATE`,
         [userId],
       );
 
@@ -722,6 +729,9 @@ class PaymentService {
       }
 
       const currentBalance = parseFloat(userResult.rows[0].pay_later_balance);
+      const totalUsed = parseFloat(
+        userResult.rows[0].total_pay_later_used || 0,
+      );
 
       if (currentBalance < roundedAmount) {
         throw new Error(
@@ -731,24 +741,20 @@ class PaymentService {
 
       // Calculate new balance
       const newBalance = currentBalance - roundedAmount;
+      const newTotalUsed = totalUsed + roundedAmount;
 
-      // Create pay later transaction (DEBIT) - use the client, not pool
-      const transactionResult = await client.query(
-        `
-      INSERT INTO pay_later_transactions (
+      // Create pay later transaction (DEBIT)
+      const transactionResult = await db.query(
+        `INSERT INTO pay_later_transactions (
         user_id, order_id, transaction_type, amount, balance_after,
         payment_method, description, metadata
-      )
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-      RETURNING *;
-      `,
+      ) VALUES ($1, $2, 'DEBIT', $3, $4, 'PAY_LATER', $5, $6)
+      RETURNING *`,
         [
           userId,
           orderId,
-          "DEBIT",
           roundedAmount,
           newBalance,
-          "PAY_LATER",
           `Purchase using pay later - Order #${orderId}`,
           JSON.stringify({
             payment_split_id: splitId,
@@ -760,43 +766,39 @@ class PaymentService {
 
       const transaction = transactionResult.rows[0];
 
-      // Link transaction to split
-      await client.query(
-        `
-      UPDATE payment_splits
-      SET 
-        pay_later_transaction_id = $1,
-        status = 'COMPLETED',
-        completed_at = CURRENT_TIMESTAMP,
-        updated_at = CURRENT_TIMESTAMP
-      WHERE id = $2
-      `,
+      // Update user's pay later balance
+      await db.query(
+        `UPDATE users
+       SET pay_later_balance = $1,
+           total_pay_later_used = $2,
+           updated_at = CURRENT_TIMESTAMP
+       WHERE id = $3`,
+        [newBalance, newTotalUsed, userId],
+      );
+
+      // Link transaction to split and mark as COMPLETED
+      await db.query(
+        `UPDATE payment_splits
+       SET pay_later_transaction_id = $1,
+           status = 'COMPLETED',
+           completed_at = CURRENT_TIMESTAMP,
+           updated_at = CURRENT_TIMESTAMP
+       WHERE id = $2`,
         [transaction.id, splitId],
       );
 
-      // Update user's pay later balance
-      await client.query(
-        `
-      UPDATE users
-      SET 
-        pay_later_balance = $1,
-        total_pay_later_used = total_pay_later_used + $2,
-        updated_at = CURRENT_TIMESTAMP
-      WHERE id = $3
-      `,
-        [newBalance, roundedAmount, userId],
-      );
-
-      // Update order pay_later_used
-      await client.query(
+      // Update order pay_later_transaction_id (do not add to pay_later_used – it was set once)
+      await db.query(
         `UPDATE orders
-        SET pay_later_transaction_id = $1,
-          updated_at = CURRENT_TIMESTAMP
-        WHERE id = $2`,
+       SET pay_later_transaction_id = $1,
+           updated_at = CURRENT_TIMESTAMP
+       WHERE id = $2`,
         [transaction.id, orderId],
       );
 
-      await client.query("COMMIT");
+      if (!useExistingClient) {
+        await db.query("COMMIT");
+      }
 
       return {
         success: true,
@@ -806,10 +808,14 @@ class PaymentService {
         new_balance: newBalance,
       };
     } catch (error) {
-      await client.query("ROLLBACK");
+      if (!useExistingClient) {
+        await db.query("ROLLBACK");
+      }
       throw error;
     } finally {
-      client.release();
+      if (!useExistingClient && db.release) {
+        db.release();
+      }
     }
   }
 
