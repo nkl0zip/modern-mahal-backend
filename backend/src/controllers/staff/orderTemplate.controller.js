@@ -37,6 +37,16 @@ const {
 
 const pool = require("../../config/db");
 
+const emitTemplateUpdated = (template_id, user_id, template) => {
+  try {
+    const { getSocketManager } = require("../../config/socket");
+    const sm = getSocketManager();
+    const payload = { template_id, template };
+    sm.sendToTemplate(template_id, "template-updated", payload);
+    if (user_id) sm.sendToUser(user_id, "template-updated", payload);
+  } catch (_) {}
+};
+
 /**
  * POST /api/order-templates
  * Create new order template
@@ -278,6 +288,8 @@ const updateTemplateHandler = async (req, res, next) => {
 
     const updatedTemplate = await updateTemplate(template_id, updateData);
 
+    emitTemplateUpdated(template_id, template.user_id, updatedTemplate);
+
     return res.status(200).json({
       message: "Template updated successfully",
       template: updatedTemplate,
@@ -379,6 +391,8 @@ const finalizeTemplateHandler = async (req, res, next) => {
 
     const finalizedTemplate = await finalizeTemplate(template_id);
 
+    emitTemplateUpdated(template_id, template.user_id, finalizedTemplate);
+
     return res.status(200).json({
       message: "Template finalized successfully",
       template: finalizedTemplate,
@@ -435,6 +449,8 @@ const assignStaffHandler = async (req, res, next) => {
       message: `Staff assigned to this template`,
       message_type: "TEXT",
     });
+
+    emitTemplateUpdated(template_id, template.user_id, updatedTemplate);
 
     return res.status(200).json({
       message: "Staff assigned successfully",
