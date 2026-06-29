@@ -789,6 +789,7 @@ const createOrderWithDelivery = async ({
   deliveryData = {},
   paymentMethods = [],
   metadata = {},
+  userPhone = null,
 }) => {
   const client = await pool.connect();
 
@@ -962,7 +963,8 @@ const createOrderWithDelivery = async ({
     const TAX_RATE = 0.18;
     const subtotal = totalAmount;
     const taxAmount = Math.round(subtotal * TAX_RATE * 100) / 100;
-    const grandTotal = subtotal + deliveryCharge + taxAmount;
+    const grandTotal =
+      Math.round((subtotal + deliveryCharge + taxAmount) * 100) / 100;
 
     // ============================================
     // STEP 5: Validate shipping address (only for non-SELF)
@@ -1058,6 +1060,78 @@ const createOrderWithDelivery = async ({
       });
 
     // ============================================
+    // STEP 9.5: If PhonePe is involved, process it BEFORE PayLater
+    // ============================================
+    // Separate PayLater and PhonePe splits
+    const payLaterSplit = paymentSplitsResult.splits.find(
+      (s) => s.payment_method === "PAY_LATER" && s.status === "PENDING",
+    );
+    const phonePeSplit = paymentSplitsResult.splits.find(
+      (s) => s.payment_method === "PHONEPE" && s.status === "PENDING",
+    );
+
+    // If PhonePe is involved, process it first
+    if (phonePeSplit) {
+      try {
+        // Process PhonePe payment (this will call the gateway)
+        const phonepeResult = await paymentService.processPhonePeSplit(
+          phonePeSplit.split_id,
+          order.id,
+          userId,
+          { user_phone: userPhone },
+          client,
+        );
+        paymentSplitsResult.splits = paymentSplitsResult.splits.map((s) =>
+          s.split_id === phonePeSplit.split_id
+            ? { ...s, redirect_url: phonepeResult.redirect_url }
+            : s,
+        );
+      } catch (error) {
+        // If PhonePe fails, rollback the entire transaction
+        console.error("PhonePe initiation failed:", error);
+        throw new Error(`Payment initiation failed: ${error.message}`);
+      }
+    }
+
+    // Only process PayLater if PhonePe succeeded or there's no PhonePe split
+    if (payLaterSplit && !phonePeSplit) {
+      // Process PayLater payment (deduct balance)
+      const payLaterResult = await paymentService.processPayLaterSplit(
+        payLaterSplit.split_id,
+        order.id,
+        userId,
+      );
+      // Update split status
+      paymentSplitsResult.splits = paymentSplitsResult.splits.map((s) =>
+        s.split_id === payLaterSplit.split_id
+          ? { ...s, status: "COMPLETED" }
+          : s,
+      );
+    }
+
+    // Determine if order uses PayLater
+    const hasPayLater = paymentSplitsResult.splits.some(
+      (s) => s.payment_method === "PAY_LATER",
+    );
+
+    // Set initial order status and payment_split_completed
+    let orderStatus = "PENDING";
+    if (hasPayLater) {
+      // If PayLater is used, order is considered PAID (credit used), but not settled yet
+      orderStatus = "PAID";
+    }
+    // payment_split_completed remains false by default
+
+    await client.query(
+      `UPDATE orders
+   SET status = $1,
+       payment_split_completed = $2,
+       updated_at = CURRENT_TIMESTAMP
+   WHERE id = $3`,
+      [orderStatus, false, order.id],
+    );
+
+    // ============================================
     // STEP 10: Create Delivery (only after payment)
     // ============================================
     const deliveryModel = require("./delivery.model");
@@ -1131,27 +1205,6 @@ const createOrderWithDelivery = async ({
         pickup_otp: pickupResult.pickup_otp,
         expires_at: pickupResult.pickup_otp_expires_at,
       };
-    }
-
-    // ============================================
-    // STEP 13: Update order status based on payment
-    // ============================================
-    // Check if all splits are completed
-    const allCompleted = await paymentModel.areAllSplitsCompleted(order.id);
-
-    if (allCompleted) {
-      // If all payment splits are completed, mark order as PAID
-      await client.query(
-        `
-        UPDATE orders
-        SET 
-          payment_split_completed = true,
-          status = 'PAID',
-          updated_at = CURRENT_TIMESTAMP
-        WHERE id = $1
-        `,
-        [order.id],
-      );
     }
 
     // ============================================

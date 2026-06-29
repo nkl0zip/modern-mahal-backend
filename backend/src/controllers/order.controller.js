@@ -100,25 +100,13 @@ const checkout = async (req, res) => {
       },
       paymentMethods: payment_methods,
       metadata: metadata || {},
+      userPhone: req.user.phone,
     });
 
-    // Check if any PhonePe splits need payment initiation
-    const phonePeSplits = order.payment_splits.filter(
-      (s) => s.payment_method === "PHONEPE" && s.status === "PENDING",
+    // Find the PhonePe split with redirect_url
+    const phonePeSplitWithUrl = order.payment_splits.find(
+      (s) => s.payment_method === "PHONEPE" && s.redirect_url,
     );
-
-    let paymentInitiation = null;
-    if (phonePeSplits.length > 0) {
-      // Initiate PhonePe payment for the first pending PhonePe split
-      const paymentService = require("../services/payment.service");
-      const phonepeResult = await paymentService.processPhonePeSplit(
-        phonePeSplits[0].split_id,
-        order.order.id,
-        userId,
-        { user_phone: req.user.phone },
-      );
-      paymentInitiation = phonepeResult;
-    }
 
     res.status(201).json({
       success: true,
@@ -129,7 +117,12 @@ const checkout = async (req, res) => {
         pickup_details: order.pickup_details,
         payment_splits: order.payment_splits,
         grand_total: order.grand_total,
-        payment_initiation: paymentInitiation,
+        payment_initiation: phonePeSplitWithUrl
+          ? {
+              split_id: phonePeSplitWithUrl.split_id,
+              redirect_url: phonePeSplitWithUrl.redirect_url,
+            }
+          : null,
       },
     });
   } catch (err) {

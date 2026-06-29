@@ -33,12 +33,31 @@ const initiatePayment = async ({
   redirectMode = "REDIRECT",
   callbackUrl = null,
 }) => {
+  // CRITICAL: PhonePe expects amount in paisa as INTEGER
+  // Round to avoid floating-point precision issues
+  const amountInPaisa = Math.round(parseFloat(amount) * 100);
+
+  // Validate amount is positive integer
+  if (amountInPaisa <= 0) {
+    throw new Error(`Invalid amount: ${amount} (${amountInPaisa} paisa)`);
+  }
+
+  console.log(`📤 Initiating PhonePe payment:`, {
+    orderId,
+    amount,
+    amountInPaisa,
+    merchantTransactionId,
+    userPhone,
+    redirectMode,
+    callbackUrl: callbackUrl || CALLBACK_URL,
+  });
+
   const payload = {
     merchantId: MERCHANT_ID,
     merchantTransactionId,
-    merchantUserId: orderId, // can be order_id or user_id
-    amount: amount * 100, // PhonePe expects amount in paisa
-    redirectUrl: `${process.env.FRONTEND_URL}/payment-status?orderId=${orderId}`, // frontend return URL after payment
+    merchantUserId: orderId,
+    amount: amountInPaisa, // Send as integer
+    redirectUrl: `${process.env.FRONTEND_URL}/payment-status?orderId=${orderId}`,
     redirectMode,
     callbackUrl: callbackUrl || CALLBACK_URL,
     mobileNumber: userPhone,

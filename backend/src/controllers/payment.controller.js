@@ -65,13 +65,16 @@ const initiatePayment = async (req, res) => {
     }
 
     // 5. Idempotency: if there's already an INITIATED payment for this split, return it
-    const existingInitiated = await paymentModel.getLatestPaymentByOrder(orderId);
+    const existingInitiated =
+      await paymentModel.getLatestPaymentByOrder(orderId);
     if (existingInitiated && existingInitiated.status === "INITIATED") {
-      const initiatedSec = (Date.now() - new Date(existingInitiated.created_at).getTime()) / 1000;
+      const initiatedSec =
+        (Date.now() - new Date(existingInitiated.created_at).getTime()) / 1000;
       if (initiatedSec < 300) {
         return res.status(400).json({
           success: false,
-          message: "A payment is already in progress for this order. Please wait or retry after 5 minutes.",
+          message:
+            "A payment is already in progress for this order. Please wait or retry after 5 minutes.",
         });
       }
     }
@@ -138,10 +141,20 @@ const paymentWebhook = async (req, res) => {
   const { response } = req.body;
   const xVerify = req.headers["x-verify"];
 
-  console.log("[WEBHOOK] Received. x-verify present:", !!xVerify, "| response present:", !!response);
+  console.log(
+    "[WEBHOOK] Received. x-verify present:",
+    !!xVerify,
+    "| response present:",
+    !!response,
+  );
 
   if (!response || !xVerify) {
-    console.warn("[WEBHOOK] Missing parameters — response:", !!response, "x-verify:", !!xVerify);
+    console.warn(
+      "[WEBHOOK] Missing parameters — response:",
+      !!response,
+      "x-verify:",
+      !!xVerify,
+    );
     return res.status(400).send("Missing parameters");
   }
 
@@ -163,7 +176,16 @@ const paymentWebhook = async (req, res) => {
     responseCode,
   } = decoded.data;
 
-  console.log("[WEBHOOK] Decoded — txnId:", merchantTransactionId, "| state:", state, "| responseCode:", responseCode, "| amount:", amount);
+  console.log(
+    "[WEBHOOK] Decoded — txnId:",
+    merchantTransactionId,
+    "| state:",
+    state,
+    "| responseCode:",
+    responseCode,
+    "| amount:",
+    amount,
+  );
 
   // 3. Map PhonePe state to our status
   let paymentStatus = "FAILED";
@@ -189,7 +211,12 @@ const paymentWebhook = async (req, res) => {
     const payment = paymentQuery.rows[0];
 
     // 5. Idempotency: if already processed, just return OK
-    console.log("[WEBHOOK] DB payment status:", payment.status, "for payment id:", payment.id);
+    console.log(
+      "[WEBHOOK] DB payment status:",
+      payment.status,
+      "for payment id:",
+      payment.id,
+    );
     if (payment.status === "SUCCESS" || payment.status === "FAILED") {
       console.log("[WEBHOOK] Skipping — already processed as:", payment.status);
       await client.query("COMMIT");
@@ -225,8 +252,25 @@ const paymentWebhook = async (req, res) => {
       [payment.id, `WEBHOOK_${state}`, decoded],
     );
 
-    // 8. If payment successful, update split status
+    // 8. If payment successful, update split status and process PayLater
     if (paymentStatus === "SUCCESS") {
+      // Extract userId from payment metadata or fallback to order
+      let userId = null;
+      if (payment.metadata) {
+        const metadata =
+          typeof payment.metadata === "string"
+            ? JSON.parse(payment.metadata)
+            : payment.metadata;
+        userId = metadata.userId || metadata.user_id || null;
+      }
+      if (!userId) {
+        const orderUser = await client.query(
+          `SELECT user_id FROM orders WHERE id = $1`,
+          [payment.order_id],
+        );
+        userId = orderUser.rows[0]?.user_id;
+      }
+
       // Find the split linked to this payment
       const splitResult = await client.query(
         `SELECT * FROM payment_splits WHERE payment_id = $1 FOR UPDATE`,
@@ -256,6 +300,109 @@ const paymentWebhook = async (req, res) => {
         );
       }
 
+      // Set order status to PAID (if not already) because PhonePe payment succeeded
+      await client.query(
+        `UPDATE orders
+        SET status = 'PAID',
+          updated_at = CURRENT_TIMESTAMP
+        WHERE id = $1 AND status = 'PENDING'`,
+        [payment.order_id],
+      );
+
+      // After PhonePe split is completed, check if there is a PENDING PAY_LATER split for this order
+      const payLaterSplitResult = await client.query(
+        `SELECT * FROM payment_splits
+         WHERE order_id = $1 AND payment_method = 'PAY_LATER' AND status = 'PENDING'
+         FOR UPDATE`,
+        [payment.order_id],
+      );
+
+      if (payLaterSplitResult.rows.length > 0) {
+        const payLaterSplit = payLaterSplitResult.rows[0];
+
+        if (!userId) {
+          throw new Error("User ID not available for PayLater deduction");
+        }
+
+        // Get user balance with lock
+        const userResult = await client.query(
+          `SELECT pay_later_balance, total_pay_later_used FROM users WHERE id = $1 FOR UPDATE`,
+          [userId],
+        );
+        if (userResult.rows.length === 0) throw new Error("User not found");
+        const currentBalance = parseFloat(userResult.rows[0].pay_later_balance);
+        const totalUsed = parseFloat(
+          userResult.rows[0].total_pay_later_used || 0,
+        );
+        const amountToDeduct = parseFloat(payLaterSplit.amount);
+
+        if (currentBalance < amountToDeduct) {
+          throw new Error(
+            `Insufficient pay later credit. Available: ${currentBalance}, Required: ${amountToDeduct}`,
+          );
+        }
+
+        const newBalance = currentBalance - amountToDeduct;
+        const newTotalUsed = totalUsed + amountToDeduct;
+
+        // Create pay later transaction (DEBIT)
+        const transactionResult = await client.query(
+          `INSERT INTO pay_later_transactions (
+            user_id, order_id, transaction_type, amount, balance_after,
+            payment_method, description, metadata
+          ) VALUES ($1, $2, 'DEBIT', $3, $4, 'PAY_LATER', $5, $6)
+          RETURNING *`,
+          [
+            userId,
+            payment.order_id,
+            amountToDeduct,
+            newBalance,
+            `Purchase using pay later - Order #${payment.order_id}`,
+            JSON.stringify({
+              payment_split_id: payLaterSplit.id,
+              order_id: payment.order_id,
+              type: "PAY_LATER_PURCHASE",
+            }),
+          ],
+        );
+        const transaction = transactionResult.rows[0];
+
+        // Update user's pay later balance
+        await client.query(
+          `UPDATE users
+           SET pay_later_balance = $1,
+               total_pay_later_used = $2,
+               updated_at = CURRENT_TIMESTAMP
+           WHERE id = $3`,
+          [newBalance, newTotalUsed, userId],
+        );
+
+        // Update order pay_later_used
+        await client.query(
+          `UPDATE orders
+           SET pay_later_used = pay_later_used + $1,
+               pay_later_transaction_id = $2,
+               updated_at = CURRENT_TIMESTAMP
+           WHERE id = $3`,
+          [amountToDeduct, transaction.id, payment.order_id],
+        );
+
+        // Mark split as COMPLETED
+        await client.query(
+          `UPDATE payment_splits
+           SET status = 'COMPLETED',
+               pay_later_transaction_id = $1,
+               completed_at = CURRENT_TIMESTAMP,
+               updated_at = CURRENT_TIMESTAMP
+           WHERE id = $2`,
+          [transaction.id, payLaterSplit.id],
+        );
+
+        console.log(
+          `✅ PayLater deduction processed for split ${payLaterSplit.id}`,
+        );
+      }
+
       // Check completion using the transaction client so uncommitted split updates are visible
       const completionResult = await client.query(
         `SELECT
@@ -266,7 +413,10 @@ const paymentWebhook = async (req, res) => {
         [payment.order_id],
       );
       const totalSplits = parseInt(completionResult.rows[0]?.total ?? 0, 10);
-      const completedSplits = parseInt(completionResult.rows[0]?.completed ?? 0, 10);
+      const completedSplits = parseInt(
+        completionResult.rows[0]?.completed ?? 0,
+        10,
+      );
       const allCompleted = totalSplits > 0 && totalSplits === completedSplits;
 
       if (allCompleted) {
@@ -283,7 +433,12 @@ const paymentWebhook = async (req, res) => {
       }
     }
 
-    console.log("[WEBHOOK] Done. Final status:", paymentStatus, "for txn:", merchantTransactionId);
+    console.log(
+      "[WEBHOOK] Done. Final status:",
+      paymentStatus,
+      "for txn:",
+      merchantTransactionId,
+    );
     await client.query("COMMIT");
     res.status(200).send("OK");
   } catch (err) {
@@ -400,7 +555,9 @@ const getPaymentStatus = async (req, res) => {
   try {
     const order = await orderModel.getOrderById(orderId);
     if (!order)
-      return res.status(404).json({ success: false, message: "Order not found" });
+      return res
+        .status(404)
+        .json({ success: false, message: "Order not found" });
     if (order.user_id !== userId && req.user.role !== "ADMIN") {
       return res.status(403).json({ success: false, message: "Access denied" });
     }
@@ -415,7 +572,9 @@ const getPaymentStatus = async (req, res) => {
 
     const latestPayment = await paymentModel.getLatestPaymentByOrder(orderId);
     if (!latestPayment)
-      return res.status(404).json({ success: false, message: "No payment found" });
+      return res
+        .status(404)
+        .json({ success: false, message: "No payment found" });
 
     return res.json({
       success: true,
@@ -427,7 +586,9 @@ const getPaymentStatus = async (req, res) => {
     });
   } catch (err) {
     console.error("Get payment status error:", err);
-    res.status(500).json({ success: false, message: "Failed to fetch payment status" });
+    res
+      .status(500)
+      .json({ success: false, message: "Failed to fetch payment status" });
   }
 };
 
@@ -541,15 +702,24 @@ const processCashSplit = async (req, res, next) => {
   const adminId = req.user.id;
 
   // Upload receipt to Cloudinary if provided
-  let receiptData = { receipt_url: null, receipt_public_id: null, transaction_id: transaction_id || null };
+  let receiptData = {
+    receipt_url: null,
+    receipt_public_id: null,
+    transaction_id: transaction_id || null,
+  };
   if (req.file) {
     try {
-      const uploadResult = await uploadToCloudinary(req.file, "payment-receipts");
+      const uploadResult = await uploadToCloudinary(
+        req.file,
+        "payment-receipts",
+      );
       receiptData.receipt_url = uploadResult.secure_url;
       receiptData.receipt_public_id = uploadResult.public_id;
     } catch (uploadErr) {
       console.error("Receipt upload failed:", uploadErr);
-      return res.status(500).json({ success: false, message: "Failed to upload receipt" });
+      return res
+        .status(500)
+        .json({ success: false, message: "Failed to upload receipt" });
     }
   }
 
@@ -565,14 +735,18 @@ const processCashSplit = async (req, res, next) => {
 
     if (splitResult.rows.length === 0) {
       await client.query("ROLLBACK");
-      return res.status(404).json({ success: false, message: "Payment split not found" });
+      return res
+        .status(404)
+        .json({ success: false, message: "Payment split not found" });
     }
 
     const split = splitResult.rows[0];
 
     if (split.status === "COMPLETED") {
       await client.query("ROLLBACK");
-      return res.status(400).json({ success: false, message: "This split is already completed" });
+      return res
+        .status(400)
+        .json({ success: false, message: "This split is already completed" });
     }
 
     if (split.payment_method !== "CASH") {
@@ -655,7 +829,10 @@ const processCashSplit = async (req, res, next) => {
       [order_id],
     );
     const totalSplits = parseInt(completionResult.rows[0]?.total ?? 0, 10);
-    const completedSplits = parseInt(completionResult.rows[0]?.completed ?? 0, 10);
+    const completedSplits = parseInt(
+      completionResult.rows[0]?.completed ?? 0,
+      10,
+    );
 
     if (totalSplits > 0 && totalSplits === completedSplits) {
       await client.query(
