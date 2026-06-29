@@ -150,6 +150,7 @@ const getDefaultSlab = async () => {
 
 /**
  * Get user's pay later limit with detailed credit information
+ * Always calculates available_credit from slab_limit and outstanding_balance.
  */
 const getUserPayLaterLimit = async (user_id) => {
   const { rows } = await pool.query(
@@ -158,7 +159,11 @@ const getUserPayLaterLimit = async (user_id) => {
       u.id as user_id,
       u.name as user_name,
       u.email as user_email,
-      u.pay_later_balance as available_credit,
+      -- Recalculate available_credit from scratch to avoid stale DB values
+      GREATEST(0, LEAST(
+        s.pay_later_limit,
+        s.pay_later_limit - GREATEST(0, (u.total_pay_later_used - u.total_pay_later_repaid))
+      )) AS available_credit,
       u.total_pay_later_used as total_used,
       u.total_pay_later_repaid as total_repaid,
       s.id as slab_id,
@@ -166,20 +171,22 @@ const getUserPayLaterLimit = async (user_id) => {
       s.rank as slab_rank,
       s.pay_later_limit as slab_limit,
       s.description as slab_description,
-      (s.pay_later_limit - u.pay_later_balance) as outstanding_balance,
-      (
-        SELECT COALESCE(SUM(amount), 0) 
-        FROM pay_later_transactions 
-        WHERE user_id = u.id 
-        AND transaction_type IN ('DEBIT', 'CREDIT')
-        AND created_at >= CURRENT_DATE - INTERVAL '30 days'
+      (u.total_pay_later_used - u.total_pay_later_repaid) as outstanding_balance,
+      COALESCE(
+        (SELECT SUM(amount) 
+         FROM pay_later_transactions 
+         WHERE user_id = u.id 
+         AND transaction_type = 'DEBIT'
+         AND created_at >= CURRENT_DATE - INTERVAL '30 days'
+        ), 0
       ) as last_30_days_usage,
-      (
-        SELECT COUNT(*) 
-        FROM pay_later_transactions 
-        WHERE user_id = u.id 
-        AND transaction_type = 'DEBIT'
-        AND created_at >= CURRENT_DATE - INTERVAL '30 days'
+      COALESCE(
+        (SELECT COUNT(*) 
+         FROM pay_later_transactions 
+         WHERE user_id = u.id 
+         AND transaction_type = 'DEBIT'
+         AND created_at >= CURRENT_DATE - INTERVAL '30 days'
+        ), 0
       ) as last_30_days_transactions
     FROM users u
     LEFT JOIN user_slabs s ON u.slab_id = s.id
@@ -242,126 +249,72 @@ const getSlabAuditLogs = async (slab_id = null, limit = 50, offset = 0) => {
 };
 
 /**
- * Assign a slab to a user
+ * Assign a slab to a user – directly sets balance.
  */
 const assignSlabToUser = async (userId, slabId) => {
   const client = await pool.connect();
-
   try {
     await client.query("BEGIN");
 
-    // Get the slab details
+    // 1. Get slab details
     const slabResult = await client.query(
       `SELECT * FROM user_slabs WHERE id = $1 AND is_active = true`,
       [slabId],
     );
-
     if (slabResult.rows.length === 0) {
       throw new Error("Slab not found or inactive");
     }
-
     const slab = slabResult.rows[0];
+    const newSlabLimit = parseFloat(slab.pay_later_limit || 0);
 
-    // Get current user pay later balance
+    // 2. Get user with lock
     const userResult = await client.query(
-      `SELECT pay_later_balance, total_pay_later_used, total_pay_later_repaid FROM users WHERE id = $1 FOR UPDATE`,
+      `SELECT id, pay_later_balance, total_pay_later_used, total_pay_later_repaid, slab_id
+       FROM users WHERE id = $1 FOR UPDATE`,
       [userId],
     );
-
     if (userResult.rows.length === 0) {
       throw new Error("User not found");
     }
-
-    const currentBalance = parseFloat(
-      userResult.rows[0].pay_later_balance || 0,
-    );
-    const totalUsed = parseFloat(userResult.rows[0].total_pay_later_used || 0);
-    const totalRepaid = parseFloat(
-      userResult.rows[0].total_pay_later_repaid || 0,
-    );
-
-    // Calculate outstanding balance (used - repaid)
+    const user = userResult.rows[0];
+    const currentBalance = parseFloat(user.pay_later_balance || 0);
+    const totalUsed = parseFloat(user.total_pay_later_used || 0);
+    const totalRepaid = parseFloat(user.total_pay_later_repaid || 0);
     const outstandingBalance = totalUsed - totalRepaid;
 
-    // Calculate new available credit
-    // If there's no outstanding balance, set to slab limit
-    // Otherwise, set to (slab limit - outstanding balance), but not less than 0
-    let newAvailableCredit;
+    // 3. Calculate target balance
+    let targetBalance;
     if (outstandingBalance <= 0) {
-      // No outstanding balance, give full slab limit
-      newAvailableCredit = parseFloat(slab.pay_later_limit || 0);
+      targetBalance = newSlabLimit;
     } else {
-      // Has outstanding balance, reduce available credit
-      newAvailableCredit = Math.max(
-        0,
-        parseFloat(slab.pay_later_limit || 0) - outstandingBalance,
-      );
+      targetBalance = Math.max(0, newSlabLimit - outstandingBalance);
+    }
+    // Cap at slab limit
+    if (targetBalance > newSlabLimit) {
+      targetBalance = newSlabLimit;
     }
 
-    // Update user with new slab and available credit
-    const updateResult = await client.query(
-      `
-      UPDATE users
-      SET 
-        slab_id = $1,
-        pay_later_balance = $2,
-        updated_at = CURRENT_TIMESTAMP
-      WHERE id = $3
-      RETURNING id, name, email, slab_id, pay_later_balance, total_pay_later_used, total_pay_later_repaid;
-      `,
-      [slabId, newAvailableCredit, userId],
+    // 4. Update slab_id AND set pay_later_balance directly to target
+    await client.query(
+      `UPDATE users
+       SET slab_id = $1, pay_later_balance = $2, updated_at = CURRENT_TIMESTAMP
+       WHERE id = $3`,
+      [slabId, targetBalance, userId],
     );
 
-    // Create a pay later transaction for the credit
-    if (newAvailableCredit > 0) {
-      await client.query(
-        `
-    INSERT INTO pay_later_transactions (
-      user_id,
-      transaction_type,
-      amount,
-      balance_after,
-      payment_method,
-      description,
-      approved_by,
-      metadata
-    )
-    VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-    `,
-        [
-          userId,
-          "CREDIT",
-          newAvailableCredit,
-          newAvailableCredit,
-          "SYSTEM",
-          `Slab assigned: ${slab.name} with limit ${slab.pay_later_limit}`,
-          userId,
-          JSON.stringify({
-            action: "SLAB_ASSIGNMENT",
-            slab_id: slabId,
-            slab_name: slab.name,
-            slab_limit: slab.pay_later_limit,
-            outstanding_balance: outstandingBalance,
-            previous_balance: currentBalance,
-          }),
-        ],
-      );
-    }
-
-    // Log the slab assignment
+    // 5. Log audit (no pay_later_transaction needed)
     await client.query(
-      `
-      INSERT INTO slab_audit_logs (slab_id, action, changes, performed_by, performed_by_role)
-      VALUES ($1, $2, $3, $4, $5)
-      `,
+      `INSERT INTO slab_audit_logs (slab_id, action, changes, performed_by, performed_by_role)
+       VALUES ($1, 'ASSIGN', $2, $3, $4)`,
       [
         slabId,
-        "ASSIGN",
         JSON.stringify({
+          previous_slab_id: user.slab_id,
+          new_slab_id: slabId,
           previous_balance: currentBalance,
-          new_balance: newAvailableCredit,
+          new_balance: targetBalance,
           outstanding_balance: outstandingBalance,
-          slab_limit: slab.pay_later_limit,
+          slab_limit: newSlabLimit,
           user_id: userId,
         }),
         userId,
@@ -370,7 +323,14 @@ const assignSlabToUser = async (userId, slabId) => {
     );
 
     await client.query("COMMIT");
-    return updateResult.rows[0] || null;
+
+    // Return updated user
+    const updatedUser = await client.query(
+      `SELECT id, name, email, slab_id, pay_later_balance, total_pay_later_used, total_pay_later_repaid
+       FROM users WHERE id = $1`,
+      [userId],
+    );
+    return updatedUser.rows[0];
   } catch (error) {
     await client.query("ROLLBACK");
     throw error;
