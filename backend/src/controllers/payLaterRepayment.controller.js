@@ -51,7 +51,7 @@ const getOutstandingPayLaterOrders = async (req, res, next) => {
       FROM orders o
       WHERE o.user_id = $1
         AND o.status = 'PAID'
-        AND o.selected_payment_method = 'MIXED'
+        AND o.selected_payment_method IN ('MIXED', 'PAY_LATER')
         AND o.pay_later_used > 0
         AND o.payment_split_completed = false
       ORDER BY o.created_at DESC
@@ -207,7 +207,10 @@ const initiatePayLaterRepayment = async (req, res, next) => {
         throw new Error("Order is not in PAID status");
       }
 
-      if (order.selected_payment_method !== "MIXED") {
+      if (
+        order.selected_payment_method !== "MIXED" &&
+        order.selected_payment_method !== "PAY_LATER"
+      ) {
         throw new Error("Order does not have pay later payment");
       }
 

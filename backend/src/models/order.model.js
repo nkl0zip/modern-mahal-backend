@@ -1100,6 +1100,7 @@ const createOrderWithDelivery = async ({
         payLaterSplit.split_id,
         order.id,
         userId,
+        client,
       );
       // Update split status
       paymentSplitsResult.splits = paymentSplitsResult.splits.map((s) =>
