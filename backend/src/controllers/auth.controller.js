@@ -182,35 +182,46 @@ const login = async (req, res) => {
   }
 };
 
-// ✅ Google Sign-In/Login
+// Google Sign-In/Login
 const googleAuth = async (req, res) => {
+  const { id_token } = req.body;
+
+  if (!id_token) {
+    return res.status(400).json({ message: "Google id_token is required" });
+  }
+
+  // Verify Google token first — return 401, not 500, on bad token
+  let googleUser;
   try {
-    const { id_token } = req.body;
+    googleUser = await verifyGoogleToken(id_token);
+  } catch (err) {
+    console.error("Google token verification failed:", err.message);
+    return res.status(401).json({ message: "Invalid or expired Google token" });
+  }
 
-    if (!id_token) {
-      return res.status(400).json({ message: "Google id_token is required" });
-    }
+  const { googleId, email, name, picture } = googleUser;
 
-    // ✅ Verify Google token
-    const googleUser = await verifyGoogleToken(id_token);
-    const { googleId, email, name, picture } = googleUser;
-
+  try {
     let isNewUser = false;
     let user;
 
-    // Check if user already signed in with Google before
     const authMethod = await findAuthMethodByProviderId(googleId, "GOOGLE");
 
     if (authMethod) {
       // Returning Google user
       user = await findUserById(authMethod.user_id);
+      if (!user) {
+        // Auth method exists but user was deleted — treat as orphan
+        console.error(`Google auth: orphaned auth_method for user_id=${authMethod.user_id}`);
+        return res.status(401).json({ message: "Account not found. Please sign up again." });
+      }
     } else {
-      // Check if an account with this email already exists (e.g. email/password user)
       const existingUser = await findUserByEmail(email);
       if (existingUser) {
-        // Link Google to the existing account
+        // Link Google to the existing account and update their avatar
         user = existingUser;
         await createAuthMethod(user.id, "GOOGLE", googleId);
+        await upsertUserProfile(user.id, null, picture || null, null, null);
       } else {
         // Brand new user
         isNewUser = true;
@@ -220,7 +231,6 @@ const googleAuth = async (req, res) => {
       }
     }
 
-    // ✅ Generate JWT
     const token = generateToken(user);
 
     res.status(200).json({
@@ -237,9 +247,7 @@ const googleAuth = async (req, res) => {
     });
   } catch (error) {
     console.error("Google Auth Error:", error);
-    res
-      .status(500)
-      .json({ message: error.message || "Google authentication failed" });
+    res.status(500).json({ message: "Google authentication failed" });
   }
 };
 

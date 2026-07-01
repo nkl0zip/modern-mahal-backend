@@ -63,13 +63,8 @@ const optionalAuthenticateToken = (req, res, next) => {
     return next();
   }
 
-  jwt.verify(token, process.env.JWT_SECRET, (err, decoded) => {
-    if (err) {
-      req.user = null;
-      return next();
-    }
-
-    req.user = decoded;
+  jwt.verify(token, jwtSecret, (err, decoded) => {
+    req.user = err ? null : decoded;
     next();
   });
 };
