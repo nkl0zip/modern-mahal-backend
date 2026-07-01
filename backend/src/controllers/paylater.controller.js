@@ -28,6 +28,21 @@ const getMyPayLaterDetails = async (req, res, next) => {
       });
     }
 
+    const totalCreditLimit = parseFloat(details.total_credit_limit || 0);
+    const availableCredit = parseFloat(details.available_credit || 0);
+    const outstandingBalance = parseFloat(details.outstanding_balance || 0);
+
+    // Calculate credit utilization percentage
+    let creditUtilizationPercentage = 0;
+    if (totalCreditLimit > 0) {
+      creditUtilizationPercentage =
+        (outstandingBalance / totalCreditLimit) * 100;
+      // Cap at 100% if outstanding exceeds limit
+      if (creditUtilizationPercentage > 100) {
+        creditUtilizationPercentage = 100;
+      }
+    }
+
     res.status(200).json({
       success: true,
       message: "Pay later details fetched successfully",
@@ -35,23 +50,16 @@ const getMyPayLaterDetails = async (req, res, next) => {
         user_id: details.user_id,
         user_name: details.user_name,
         user_email: details.user_email,
-        available_credit: parseFloat(details.available_credit || 0),
-        total_credit_limit: parseFloat(details.total_credit_limit || 0),
+        available_credit: availableCredit,
+        total_credit_limit: totalCreditLimit,
         total_used: parseFloat(details.total_used || 0),
         total_repaid: parseFloat(details.total_repaid || 0),
-        outstanding_balance: parseFloat(details.outstanding_balance || 0),
+        outstanding_balance: outstandingBalance,
         slab_id: details.slab_id,
         slab_name: details.slab_name || "No slab assigned",
         slab_rank: details.slab_rank || null,
         slab_description: details.slab_description || null,
-        credit_utilization_percentage:
-          details.total_credit_limit > 0
-            ? (
-                (parseFloat(details.outstanding_balance || 0) /
-                  parseFloat(details.total_credit_limit)) *
-                100
-              ).toFixed(2)
-            : 0,
+        credit_utilization_percentage: creditUtilizationPercentage.toFixed(2),
       },
     });
   } catch (err) {

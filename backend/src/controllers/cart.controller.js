@@ -171,6 +171,11 @@ const clearCartHandler = async (req, res, next) => {
     // Clear the cart
     await clearCart(cart.id);
 
+    // Delete all mappings for this cart
+    await pool.query(`DELETE FROM template_cart_mappings WHERE cart_id = $1`, [
+      cart.id,
+    ]);
+
     // Restore template items status back to ACTIVE
     if (templateItems.length > 0) {
       // Using pool directly since we're in the controller

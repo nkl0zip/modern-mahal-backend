@@ -19,7 +19,8 @@ const getUserPayLaterDetails = async (user_id) => {
       s.rank as slab_rank,
       s.pay_later_limit as total_credit_limit,
       s.description as slab_description,
-      (s.pay_later_limit - u.pay_later_balance) as outstanding_balance
+      -- Correct outstanding balance calculation
+      (u.total_pay_later_used - u.total_pay_later_repaid) as outstanding_balance
     FROM users u
     LEFT JOIN user_slabs s ON u.slab_id = s.id
     WHERE u.id = $1;

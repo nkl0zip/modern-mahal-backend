@@ -146,6 +146,20 @@ const getUserPayLaterLimitHandler = async (req, res, next) => {
       });
     }
 
+    // Calculate credit utilization percentage safely
+    const slabLimit = parseFloat(userInfo.slab_limit || 0);
+    const outstandingBalance = parseFloat(userInfo.outstanding_balance || 0);
+    const availableCredit = parseFloat(userInfo.available_credit || 0);
+
+    let creditUtilizationPercentage = 0;
+    if (slabLimit > 0) {
+      creditUtilizationPercentage = (outstandingBalance / slabLimit) * 100;
+      // Cap at 100% if outstanding exceeds limit
+      if (creditUtilizationPercentage > 100) {
+        creditUtilizationPercentage = 100;
+      }
+    }
+
     res.status(200).json({
       success: true,
       message: "Pay later limit fetched successfully",
@@ -156,23 +170,17 @@ const getUserPayLaterLimitHandler = async (req, res, next) => {
         slab_id: userInfo.slab_id,
         slab_name: userInfo.slab_name || "No slab assigned",
         slab_rank: userInfo.slab_rank || null,
-        slab_limit: parseFloat(userInfo.slab_limit || 0),
-        available_credit: parseFloat(userInfo.available_credit || 0),
-        outstanding_balance: parseFloat(userInfo.outstanding_balance || 0),
+        slab_limit: slabLimit,
+        available_credit: availableCredit,
+        outstanding_balance: outstandingBalance,
         total_used: parseFloat(userInfo.total_used || 0),
         total_repaid: parseFloat(userInfo.total_repaid || 0),
         slab_description: userInfo.slab_description || null,
-        credit_utilization_percentage:
-          userInfo.slab_limit > 0
-            ? (
-                (parseFloat(userInfo.outstanding_balance || 0) /
-                  parseFloat(userInfo.slab_limit)) *
-                100
-              ).toFixed(2)
-            : 0,
+        credit_utilization_percentage: creditUtilizationPercentage.toFixed(2),
         last_30_days_usage: parseFloat(userInfo.last_30_days_usage || 0),
         last_30_days_transactions: parseInt(
           userInfo.last_30_days_transactions || 0,
+          10,
         ),
       },
     });
